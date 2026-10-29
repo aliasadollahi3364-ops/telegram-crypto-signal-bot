@@ -74,3 +74,50 @@ def render_signal_chart(
     fig.savefig(path, dpi=140)
     plt.close(fig)
     return str(path)
+
+
+def render_market_chart(
+    candles: Sequence[Sequence[float]],
+    symbol: str,
+    timeframe: str = "15m",
+    output_path: str = "/tmp/weex_market.png",
+) -> str:
+    """Render a fresh market snapshot; no signals or strategy levels are invented."""
+    if len(candles) < 3:
+        raise ValueError("WEEX returned fewer than three confirmed candles.")
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from datetime import datetime, timezone
+    from matplotlib.patches import Rectangle
+
+    dates = [datetime.fromtimestamp(float(c[0]) / 1000, tz=timezone.utc) for c in candles]
+    fig, ax = plt.subplots(figsize=(12, 7))
+    width = 0.62
+    for i, c in enumerate(candles):
+        _, op, hi, lo, cl = c[:5]
+        op, hi, lo, cl = map(float, (op, hi, lo, cl))
+        rising = cl >= op
+        ax.vlines(i, lo, hi, linewidth=1, color=("#15803d" if rising else "#b91c1c"))
+        bottom = min(op, cl)
+        height = max(abs(cl-op), max(abs(hi)*0.00003, 1e-9))
+        ax.add_patch(Rectangle((i-width/2, bottom), width, height,
+                               facecolor=("#16a34a" if rising else "#dc2626"),
+                               edgecolor=("#15803d" if rising else "#b91c1c"),
+                               linewidth=0.7, alpha=0.85))
+    last = float(candles[-1][4])
+    ax.axhline(last, linestyle="--", linewidth=1, label=f"آخرین بسته‌شدن: {last:g}")
+    ticks = list(range(0, len(dates), max(1, len(dates)//8)))
+    ax.set_xticks(ticks)
+    ax.set_xticklabels([dates[i].strftime("%m-%d %H:%M") for i in ticks], rotation=30, ha="right")
+    ax.set_title(f"WEEX | {symbol} | {timeframe} | نمای بازار\nکندل‌های تأییدشده، زمان UTC")
+    ax.set_ylabel("قیمت")
+    ax.set_xlabel("زمان کندل (UTC)")
+    ax.grid(True, alpha=0.2)
+    ax.legend(loc="best", fontsize=8)
+    fig.tight_layout()
+    path = Path(output_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(path, dpi=140)
+    plt.close(fig)
+    return str(path)
