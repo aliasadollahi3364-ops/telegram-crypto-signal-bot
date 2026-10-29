@@ -15,7 +15,7 @@ import httpx
 from dotenv import load_dotenv
 
 from storage import Store
-from charting import render_signal_chart
+from charting import render_signal_chart, render_market_chart
 
 load_dotenv()
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"),
