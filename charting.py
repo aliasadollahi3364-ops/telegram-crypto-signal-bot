@@ -81,6 +81,10 @@ def render_market_chart(
     symbol: str,
     timeframe: str = "15m",
     output_path: str = "/tmp/weex_market.png",
+    sma_values: Sequence[float | None] | None = None,
+    order_blocks: Sequence[dict[str, Any]] = (),
+    choch_price: float | None = None,
+    signal: dict[str, Any] | None = None,
 ) -> str:
     """Render a fresh market snapshot; no signals or strategy levels are invented."""
     if len(candles) < 3:
@@ -107,10 +111,35 @@ def render_market_chart(
                                linewidth=0.7, alpha=0.85))
     last = float(candles[-1][4])
     ax.axhline(last, linestyle="--", linewidth=1, label=f"آخرین بسته‌شدن: {last:g}")
+    if sma_values is not None and len(sma_values) == len(candles):
+        valid = [(i, float(v)) for i, v in enumerate(sma_values) if v is not None]
+        if valid:
+            ax.plot([p[0] for p in valid], [p[1] for p in valid],
+                    linewidth=1.5, label="SMA200")
+    for zone in order_blocks:
+        lo, hi = float(zone["low"]), float(zone["high"])
+        start = max(0, int(zone.get("start", 0)))
+        end = min(len(candles) - 1, int(zone.get("end", len(candles) - 1)))
+        ax.fill_between([start, end], [lo, lo], [hi, hi], alpha=0.20,
+                        label=str(zone.get("label", "Order Block")))
+    if choch_price is not None:
+        ax.axhline(float(choch_price), linestyle=":", linewidth=1.3,
+                   label=f"CHoCH {float(choch_price):g}")
+    if signal:
+        ax.axhline(float(signal["entry"]), linewidth=1.6, label=f"ورود {float(signal['entry']):g}")
+        if signal.get("stop_loss") is not None:
+            ax.axhline(float(signal["stop_loss"]), linestyle="--", linewidth=1.2,
+                       label=f"حد ضرر {float(signal['stop_loss']):g}")
+        if signal.get("take_profit") is not None:
+            ax.axhline(float(signal["take_profit"]), linestyle="--", linewidth=1.2,
+                       label=f"حد سود {float(signal['take_profit']):g}")
     ticks = list(range(0, len(dates), max(1, len(dates)//8)))
     ax.set_xticks(ticks)
     ax.set_xticklabels([dates[i].strftime("%m-%d %H:%M") for i in ticks], rotation=30, ha="right")
-    ax.set_title(f"WEEX | {symbol} | {timeframe} | نمای بازار\nکندل‌های تأییدشده، زمان UTC")
+    title = f"WEEX | {symbol} | {timeframe} | نمای بازار"
+    if signal:
+        title += f" | سیگنال {signal.get('side', '')}"
+    ax.set_title(title + "\nکندل‌های تأییدشده، زمان UTC")
     ax.set_ylabel("قیمت")
     ax.set_xlabel("زمان کندل (UTC)")
     ax.grid(True, alpha=0.2)
