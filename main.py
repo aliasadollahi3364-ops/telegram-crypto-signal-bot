@@ -214,14 +214,32 @@ async def handle_command(text: str, chat_id: str, notifier: TelegramNotifier, st
             from market_data import WeexMarketData
             market = WeexMarketData()
             try:
-                candles = await market.fetch_ohlcv(arg, timeframe="15m", limit=100)
+                candles = await market.fetch_ohlcv(arg, timeframe="15m", limit=300)
+                candles4h = await market.fetch_ohlcv(arg, timeframe="4h", limit=300)
                 safe_name = arg.replace("/", "_").replace(":", "_")
                 path = str(Path(tempfile.gettempdir()) / f"weex_market_{safe_name}.png")
-                render_market_chart(candles, arg, "15m", path)
+                import pandas as pd
+                closes = pd.Series([float(c[4]) for c in candles])
+                sma_series = closes.rolling(200, min_periods=200).mean()
+                sma_values = [None if pd.isna(v) else float(v) for v in sma_series]
+                cfg = StrategyConfig(
+                    use_trend_filter=os.getenv("USE_TREND_FILTER", "false").lower() == "true",
+                    use_sma200_filter=setting_bool(store, "sma200", "USE_SMA200_FILTER", False),
+                    use_break_even=setting_bool(store, "break_even", "USE_BREAK_EVEN", True),
+                    use_trailing_stop=setting_bool(store, "trailing_stop", "USE_TRAILING_STOP", True),
+                )
+                signal = evaluate_latest(candles, candles4h, cfg)
+                order_blocks = signal.get("order_blocks", []) if signal else []
+                choch_price = signal.get("choch_price") if signal else None
+                render_market_chart(candles, arg, "15m", path, sma_values=sma_values,
+                                    order_blocks=order_blocks, choch_price=choch_price, signal=signal)
                 last = float(candles[-1][4])
                 caption = (f"📈 نمودار تازه WEEX | {arg}\n"
-                           f"تایم‌فریم: ۱۵ دقیقه\nآخرین کندل تأییدشده: {last:g}\n"
-                           "تصویر هنگام درخواست ساخته شده؛ در تلگرام به‌صورت خودکار به‌روزرسانی نمی‌شود.")
+                           f"تایم‌فریم: ۱۵ دقیقه\nآخرین کندل: {last:g}\n"
+                           f"SMA200: {'نمایش داده شد' if any(v is not None for v in sma_values) else 'داده کافی نیست'}\n"
+                           f"سیگنال جدید روی آخرین کندل: {'بله' if signal else 'خیر'}\n"
+                           "Order Block و CHoCH فقط وقتی منطق فعلی استراتژی سیگنال تأیید کند نمایش داده می‌شوند.\n"
+                           "FVG نمایش داده نمی‌شود. تصویر فقط هنگام درخواست ساخته می‌شود.")
                 await notifier.send_photo(path, caption, chat_id)
             except Exception as exc:
                 log.exception("Unable to create market chart for %s", arg)
