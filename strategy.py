@@ -43,7 +43,7 @@ class StrategyConfig:
     use_break_even: bool = True
     break_even_trigger_r: float = 1.0
     use_trailing_stop: bool = True
-    trailing_atr_mult: float = 1.5  # Pine exposes this input but uses fixed initial risk distance instead.
+    trailing_atr_mult: float = 1.5  # Kept for config compatibility; OB-based trailing uses the ATR buffer below.
 
 
 def _prepare(candles: list[list[float]]) -> pd.DataFrame:
@@ -185,16 +185,30 @@ def evaluate_latest(
                     if cfg.use_break_even and high >= trade["entry"] + trade["initial_risk"] * cfg.break_even_trigger_r:
                         trade["sl"] = max(trade["sl"], trade["entry"])
                     if cfg.use_trailing_stop:
-                        trade["extreme"] = max(trade["extreme"], high)
-                        trail = min(trade["extreme"] - trade["trail_distance"], trade["tp"] - 1e-12)
-                        trade["sl"] = max(trade["sl"], trail)
+                        # Trail only behind a confirmed, active bullish order block.
+                        # Never move the stop down or into the selected OB.
+                        candidates = [ob for ob in obs
+                                      if ob["active"] and ob["direction"] == 1
+                                      and ob["bottom"] < float(row["close"])]
+                        if candidates:
+                            latest_ob = max(candidates, key=lambda x: x["timestamp"])
+                            trail = float(latest_ob["bottom"]) - float(atr) * cfg.sl_buffer_atr
+                            trail = min(trail, trade["tp"] - 1e-12)
+                            trade["sl"] = max(trade["sl"], trail)
                 else:
                     if cfg.use_break_even and low <= trade["entry"] - trade["initial_risk"] * cfg.break_even_trigger_r:
                         trade["sl"] = min(trade["sl"], trade["entry"])
                     if cfg.use_trailing_stop:
-                        trade["extreme"] = min(trade["extreme"], low)
-                        trail = max(trade["extreme"] + trade["trail_distance"], trade["tp"] + 1e-12)
-                        trade["sl"] = min(trade["sl"], trail)
+                        # Trail only behind a confirmed, active bearish order block.
+                        # Never move the stop up or into the selected OB.
+                        candidates = [ob for ob in obs
+                                      if ob["active"] and ob["direction"] == -1
+                                      and ob["top"] > float(row["close"])]
+                        if candidates:
+                            latest_ob = max(candidates, key=lambda x: x["timestamp"])
+                            trail = float(latest_ob["top"]) + float(atr) * cfg.sl_buffer_atr
+                            trail = max(trail, trade["tp"] + 1e-12)
+                            trade["sl"] = min(trade["sl"], trail)
         if trade is not None:
             continue
 
@@ -251,7 +265,9 @@ def evaluate_latest(
                 tp = entry + distance * cfg.risk_reward if side == "BUY" else entry - distance * cfg.risk_reward
                 trade = {"side": side, "entry": entry, "sl": float(sl), "tp": tp,
                          "initial_risk": distance, "trail_distance": distance,
-                         "extreme": float(row["high"] if side == "BUY" else row["low"])}
+                         "extreme": float(row["high"] if side == "BUY" else row["low"]),
+                         "ob_top": float(top), "ob_bottom": float(bottom),
+                         "ob_direction": int(direction)}
                 ob["used"] = True
                 if i == len(df) - 1:
                     latest_signal = {
