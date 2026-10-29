@@ -167,6 +167,27 @@ async def send_signal_alert(
     return signal_id
 
 
+async def notify_closed_signals(
+    notifier: TelegramNotifier, store: Store, symbol: str,
+    candle_high: float, candle_low: float,
+) -> int:
+    """Call once for each newly closed 15m candle, after the signal is already recorded."""
+    closed = store.evaluate_candle(symbol, candle_high, candle_low)
+    for row in closed:
+        emoji = "🎯" if row["exit_label"] == "TP" else "🛑"
+        title = "حد سود فعال شد" if row["exit_label"] == "TP" else "حد ضرر فعال شد"
+        await notifier.send(
+            f"{emoji} {title} | {row['symbol']}\n"
+            f"جهت سیگنال: {'خرید' if row['side'] == 'BUY' else 'فروش'}\n"
+            f"شماره سیگنال: #{row['id']}\n"
+            f"قیمت ورود: {row['entry']}\n"
+            f"قیمت خروج محاسباتی: {row['exit_price']}\n"
+            f"نتیجه تخمینی: {row['pnl_pct']:+.3f}%\n"
+            "این نتیجه بر پایه قیمت کندل بازار است، نه معامله واقعی در حساب WEEX."
+        )
+    return len(closed)
+
+
 async def run() -> None:
     token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
     chat_id = os.getenv("TELEGRAM_CHAT_ID", "").strip()
