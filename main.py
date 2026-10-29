@@ -158,7 +158,7 @@ async def handle_command(text: str, chat_id: str, notifier: TelegramNotifier, st
             "🟢 فرایند ربات فعال است.\n"
             f"شروع ثبت آمار: {store.get_setting('started_at')}\n"
             f"جفت‌ارزهای انتخاب‌شده: {len(store.list_pairs())}\n"
-            f"اسکن استراتژی: {'آزمایشی روشن' if os.getenv('SCANNER_ENABLED', 'false').lower() == 'true' else 'خاموش تا اعتبارسنجی'}\nنمودار بازار: /chart BTC/USDT\nمعامله واقعی: غیرفعال",
+            f"اسکن استراتژی: {'آزمایشی روشن' if os.getenv('SCANNER_ENABLED', 'true').lower() == 'true' else 'خاموش در تنظیمات سرویس'}\nنمودار بازار: /chart BTC/USDT\nمعامله واقعی: غیرفعال",
             chat_id,
         )
     else:
@@ -229,7 +229,7 @@ async def run() -> None:
     store = Store()
     notifier = TelegramNotifier(token, chat_id)
     log.info("Bot online; signals-only; timeframe=%s", timeframe)
-    scanner_enabled = os.getenv("SCANNER_ENABLED", "false").strip().lower() == "true"
+    scanner_enabled = os.getenv("SCANNER_ENABLED", "true").strip().lower() == "true"
     scan_interval = max(30, int(os.getenv("SCAN_INTERVAL_SECONDS", "60")))
     market = None
     if scanner_enabled:
