@@ -103,7 +103,7 @@ def _build_ob_events(htf_candles: list[list[float]], cfg: StrategyConfig) -> tup
                 found = next((j for j in range(i-1, max(-1, i-cfg.ob_search-1), -1)
                               if htf.at[j, "close"] < htf.at[j, "open"]), None)
                 if found is not None:
-                    events.append({"timestamp": row["timestamp"], "direction": 1,
+                    events.append({"timestamp": row["timestamp"] + pd.Timedelta(hours=4), "direction": 1,
                                    "top": float(htf.at[found, "high"]), "bottom": float(htf.at[found, "low"]),
                                    "left": htf.at[found, "timestamp"], "trend": trend})
         if bear_bos:
@@ -112,7 +112,7 @@ def _build_ob_events(htf_candles: list[list[float]], cfg: StrategyConfig) -> tup
                 found = next((j for j in range(i-1, max(-1, i-cfg.ob_search-1), -1)
                               if htf.at[j, "close"] > htf.at[j, "open"]), None)
                 if found is not None:
-                    events.append({"timestamp": row["timestamp"], "direction": -1,
+                    events.append({"timestamp": row["timestamp"] + pd.Timedelta(hours=4), "direction": -1,
                                    "top": float(htf.at[found, "high"]), "bottom": float(htf.at[found, "low"]),
                                    "left": htf.at[found, "timestamp"], "trend": trend})
         htf.at[i, "trend"] = trend
@@ -188,7 +188,7 @@ def evaluate_latest(
                     trade["sl"] = min(trade["sl"], trail)
                 if high >= trade["sl"] or low <= trade["tp"]:
                     trade = None
-        if trade is not None or i != len(df) - 1:
+        if trade is not None:
             continue
 
         for ob in obs:
@@ -246,14 +246,15 @@ def evaluate_latest(
                          "initial_risk": distance, "trail_distance": distance,
                          "extreme": float(row["high"] if side == "BUY" else row["low"])}
                 ob["used"] = True
-                latest_signal = {
+                if i == len(df) - 1:
+                    latest_signal = {
                     "side": side, "entry": entry, "stop_loss": float(sl), "take_profit": float(tp),
                     "timestamp": int(ts.timestamp() * 1000),
                     "choch_price": float(level) if level is not None else None,
                     "order_blocks": [{"low": bottom, "high": top, "start": 0, "end": len(df)-1,
                                       "label": "Order Block صعودی" if direction == 1 else "Order Block نزولی"}],
                     "fvgs": _valid_fvgs(df.iloc[:i+1]),
-                }
+                    }
                 break
     return latest_signal
 
@@ -271,9 +272,15 @@ def _valid_fvgs(df: pd.DataFrame) -> list[dict[str, Any]]:
     valid = []
     for z in zones:
         invalid = False
-        # FVG is valid if no later close crossed its far edge.
-        for _, row in df.iterrows():
-            if row["close"] <= z["low"] if "صعودی" in z["label"] else row["close"] >= z["high"]:
+        # Locate the bar where this zone formed; only later closes can invalidate it.
+        formed = next((j for j in range(2, len(df)) if
+                       (float(df.iloc[j]["low"]) > float(df.iloc[j-2]["high"]) and "صعودی" in z["label"] and
+                        abs(float(df.iloc[j]["low"]) - z["high"]) < 1e-12) or
+                       (float(df.iloc[j]["high"]) < float(df.iloc[j-2]["low"]) and "نزولی" in z["label"] and
+                        abs(float(df.iloc[j]["high"]) - z["low"]) < 1e-12)), len(df)-1)
+        for j in range(formed + 1, len(df)):
+            close = float(df.iloc[j]["close"])
+            if ("صعودی" in z["label"] and close <= z["low"]) or ("نزولی" in z["label"] and close >= z["high"]):
                 invalid = True
                 break
         if not invalid:
