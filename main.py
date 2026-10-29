@@ -187,6 +187,7 @@ async def send_signal_alert(
         f"تایم‌فریم: {timeframe}\nورود: {entry}\n"
         f"حد ضرر: {stop_loss if stop_loss is not None else 'تعریف نشده'}\n"
         f"حد سود: {take_profit if take_profit is not None else 'تعریف نشده'}\n"
+        f"استاپ سر‌به‌سر: {'روشن' if break_even_enabled else 'خاموش'} | استاپ شناور: {'روشن' if trailing_enabled else 'خاموش'}\n"
         f"شماره ثبت: #{signal_id}\n"
         "تصویر: کندل‌ها و نواحی‌ای که استراتژی تأیید کرده است.\n"
         "این پیام سیگنال است؛ سفارش واقعی ارسال نشده."
