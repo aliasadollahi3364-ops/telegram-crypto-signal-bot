@@ -171,12 +171,16 @@ async def send_signal_alert(
     stop_loss: float | None = None, take_profit: float | None = None,
     order_blocks: Sequence[dict[str, Any]] = (), fvgs: Sequence[dict[str, Any]] = (),
     choch_price: float | None = None, timeframe: str = "15m",
+    break_even_enabled: bool = False, trailing_enabled: bool = False,
 ) -> int:
     """Called by the validated strategy adapter when a genuinely new signal appears."""
     path = str(Path(tempfile.gettempdir()) / f"weex_signal_{symbol.replace('/', '_')}_{side.lower()}.png")
     render_signal_chart(candles, symbol, timeframe, side, entry, stop_loss, take_profit,
                         order_blocks, fvgs, choch_price, path)
-    signal_id = store.record_signal(symbol, side, entry, stop_loss, take_profit, path)
+    signal_id = store.record_signal(
+        symbol, side, entry, stop_loss, take_profit, path,
+        break_even_enabled=break_even_enabled, trailing_enabled=trailing_enabled,
+    )
     caption = (
         f"📣 سیگنال جدید WEEX | {symbol}\n"
         f"جهت: {'خرید 🟢' if side.upper() == 'BUY' else 'فروش 🔴'}\n"
@@ -279,7 +283,9 @@ async def run() -> None:
                                     entry=signal["entry"], candles=candles15,
                                     stop_loss=signal["stop_loss"], take_profit=signal["take_profit"],
                                     order_blocks=signal["order_blocks"], fvgs=signal["fvgs"],
-                                    choch_price=signal["choch_price"], timeframe="15m")
+                                    choch_price=signal["choch_price"], timeframe="15m",
+                                    break_even_enabled=config.use_break_even,
+                                    trailing_enabled=config.use_trailing_stop)
                                 store.set_setting(signal_key, str(signal["timestamp"]))
                     except Exception:
                         log.exception("Scanner error for %s", requested)
