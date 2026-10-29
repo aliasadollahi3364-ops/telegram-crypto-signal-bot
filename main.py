@@ -261,7 +261,7 @@ async def run() -> None:
                     use_trend_filter=os.getenv("USE_TREND_FILTER", "false").lower() == "true",
                     use_sma200_filter=os.getenv("USE_SMA200_FILTER", "false").lower() == "true",
                     use_break_even=os.getenv("USE_BREAK_EVEN", "true").lower() == "true",
-                    use_trailing_stop=os.getenv("USE_TRAILING_STOP", "false").lower() == "true",
+                    use_trailing_stop=os.getenv("USE_TRAILING_STOP", "true").lower() == "true",
                 )
                 for requested in store.list_pairs():
                     try:
