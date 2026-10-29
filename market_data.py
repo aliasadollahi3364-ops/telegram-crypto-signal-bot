@@ -50,14 +50,14 @@ class WeexMarketData:
         return symbol
 
     async def fetch_ohlcv(self, requested: str, timeframe: str = "15m", limit: int = 300) -> list[list[float]]:
-        if timeframe != "15m":
-            raise ValueError("This bot currently permits only the requested 15m timeframe.")
+        if timeframe not in ("15m", "4h"):
+            raise ValueError("Supported strategy timeframes are 15m and 4h.")
         symbol = await self.resolve_symbol(requested)
         candles = await asyncio.to_thread(self.exchange.fetch_ohlcv, symbol, timeframe, None, min(limit, 300))
         if not candles:
             raise RuntimeError(f"WEEX returned no candles for {symbol}")
         # Do not treat the currently-forming candle as confirmed.
-        interval_ms = 15 * 60 * 1000
+        interval_ms = 15 * 60 * 1000 if timeframe == "15m" else 4 * 60 * 60 * 1000
         now_ms = self.exchange.milliseconds()
         return [c for c in candles if int(c[0]) + interval_ms <= now_ms]
 
