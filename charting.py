@@ -50,9 +50,7 @@ def render_signal_chart(
         ax.axhspan(lo, hi, xmin=max(0, start) / max(1, len(candles)),
                    xmax=min(len(candles)-1, end) / max(1, len(candles)),
                    alpha=0.18, label=str(zone.get("label", "Order Block")))
-    for zone in fvgs:
-        lo, hi = float(zone["low"]), float(zone["high"])
-        ax.axhspan(lo, hi, alpha=0.10, label=str(zone.get("label", "FVG")))
+    # FVG intentionally omitted from charts per user request.
     ax.axhline(float(entry), linewidth=1.5, linestyle="-", label=f"Entry {entry:g}")
     if stop_loss is not None:
         ax.axhline(float(stop_loss), linewidth=1.2, linestyle="--", label=f"SL {stop_loss:g}")
