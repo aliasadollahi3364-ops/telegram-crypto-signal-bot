@@ -127,8 +127,8 @@ HELP = (
     "🇮🇷 راهنمای پنل ربات WEEX\n\n"
     "/settings — تنظیمات دستی با دکمه‌های فارسی\n"
     "/pairs — نمایش جفت‌ارزهای انتخاب‌شده\n"
-    "/add BTC/USDT — افزودن جفت‌ارز\n"
-    "/remove BTC/USDT — حذف جفت‌ارز\n"
+    "/add BTC — افزودن ارز (مثلاً BTC)\n"
+    "/remove BTC — حذف ارز (مثلاً BTC)\n"
     "/stats — آمار کلی از زمان شروع ثبت\n"
     "/stats BTC/USDT — آمار یک جفت‌ارز\n"
     "/open — نمایش سیگنال‌های باز\n"
@@ -160,19 +160,42 @@ async def handle_command(text: str, chat_id: str, notifier: TelegramNotifier, st
         await show_settings(chat_id, notifier, store)
     elif command == "/pairs":
         pairs = store.list_pairs()
-        await notifier.send("📌 جفت‌ارزهای انتخاب‌شده:\n" + ("\n".join(pairs) if pairs else "هنوز جفت‌ارزی انتخاب نشده است.\nمثال: /add BTC/USDT"), chat_id)
+        await notifier.send("📌 جفت‌ارزهای انتخاب‌شده:\n" + ("\n".join(pairs) if pairs else "هنوز جفت‌ارزی انتخاب نشده است.\nمثال: /add BTC"), chat_id)
     elif command == "/add":
-        if not arg or "/" not in arg:
-            await notifier.send("فرمت درست: /add BTC/USDT", chat_id)
+        if not arg:
+            await notifier.send(
+                "➕ فقط نام ارز را بفرست؛ مثلاً: /add BTC\n"
+                "نمونه‌های دیگر: ETH ، TRX ، SOL\n"
+                "ربات خودش آن را به جفت‌ارز USDT تبدیل می‌کند.",
+                chat_id,
+            )
         else:
-            added = store.add_pair(arg)
-            await notifier.send(("✅ اضافه شد: " if added else "ℹ️ از قبل در فهرست است: ") + arg, chat_id)
+            base = arg.upper().replace("/", "").replace("-", "").replace("_", "")
+            if base.endswith("USDT"):
+                base = base[:-4]
+            if not base or not base.isalnum():
+                await notifier.send("❌ نام ارز معتبر نیست. مثال: /add BTC", chat_id)
+            else:
+                symbol = f"{base}/USDT"
+                added = store.add_pair(symbol)
+                await notifier.send(("✅ اضافه شد: " if added else "ℹ️ از قبل در فهرست است: ") + symbol, chat_id)
     elif command == "/remove":
-        if not arg or "/" not in arg:
-            await notifier.send("فرمت درست: /remove BTC/USDT", chat_id)
+        if not arg:
+            await notifier.send(
+                "➖ فقط نام ارز را بفرست؛ مثلاً: /remove BTC\n"
+                "ربات آن را به جفت‌ارز USDT تبدیل می‌کند.",
+                chat_id,
+            )
         else:
-            removed = store.remove_pair(arg)
-            await notifier.send(("🗑 حذف شد: " if removed else "این جفت‌ارز در فهرست نبود: ") + arg, chat_id)
+            base = arg.upper().replace("/", "").replace("-", "").replace("_", "")
+            if base.endswith("USDT"):
+                base = base[:-4]
+            if not base or not base.isalnum():
+                await notifier.send("❌ نام ارز معتبر نیست. مثال: /remove BTC", chat_id)
+            else:
+                symbol = f"{base}/USDT"
+                removed = store.remove_pair(symbol)
+                await notifier.send(("🗑 حذف شد: " if removed else "این جفت‌ارز در فهرست نبود: ") + symbol, chat_id)
     elif command == "/stats":
         await notifier.send(fmt_stats(store.stats(arg or None), arg or "کل ربات"), chat_id)
     elif command == "/open":
@@ -319,7 +342,7 @@ async def run() -> None:
                                 pairs = store.list_pairs()
                                 await notifier.send(
                                     "📌 جفت‌ارزهای انتخاب‌شده:\n" + ("\n".join(pairs) if pairs else "فهرست خالی است.")
-                                    + "\n\nبرای افزودن/حذف از دستورهای /add BTC/USDT و /remove BTC/USDT استفاده کن.",
+                                    + "\n\nبرای افزودن/حذف فقط نماد ارز را وارد کن؛ مثال: /add BTC یا /remove BTC.",
                                     source_chat,
                                     {"inline_keyboard": [[{"text": "⬅️ بازگشت به تنظیمات", "callback_data": "settings:menu"}]]},
                                 )
