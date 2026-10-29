@@ -167,27 +167,34 @@ def evaluate_latest(
         if pd.isna(atr):
             continue
 
-        # Resolve existing paper position with the strategy's current stop/target.
+        # Resolve a position against the levels that were active before this candle.
+        # If it survives, update BE/trailing for the next candle only; never let a
+        # newly moved stop trigger retroactively on the same OHLC bar.
         if trade is not None:
             high, low = float(row["high"]), float(row["low"])
             if trade["side"] == "BUY":
-                if cfg.use_break_even and high >= trade["entry"] + trade["initial_risk"] * cfg.break_even_trigger_r:
-                    trade["sl"] = max(trade["sl"], trade["entry"])
-                if cfg.use_trailing_stop:
-                    trade["extreme"] = max(trade["extreme"], high)
-                    trail = min(trade["extreme"] - trade["trail_distance"], trade["tp"] - 1e-12)
-                    trade["sl"] = max(trade["sl"], trail)
-                if low <= trade["sl"] or high >= trade["tp"]:
-                    trade = None
+                sl_hit = low <= trade["sl"]
+                tp_hit = high >= trade["tp"]
             else:
-                if cfg.use_break_even and low <= trade["entry"] - trade["initial_risk"] * cfg.break_even_trigger_r:
-                    trade["sl"] = min(trade["sl"], trade["entry"])
-                if cfg.use_trailing_stop:
-                    trade["extreme"] = min(trade["extreme"], low)
-                    trail = max(trade["extreme"] + trade["trail_distance"], trade["tp"] + 1e-12)
-                    trade["sl"] = min(trade["sl"], trail)
-                if high >= trade["sl"] or low <= trade["tp"]:
-                    trade = None
+                sl_hit = high >= trade["sl"]
+                tp_hit = low <= trade["tp"]
+            if sl_hit or tp_hit:
+                trade = None
+            else:
+                if trade["side"] == "BUY":
+                    if cfg.use_break_even and high >= trade["entry"] + trade["initial_risk"] * cfg.break_even_trigger_r:
+                        trade["sl"] = max(trade["sl"], trade["entry"])
+                    if cfg.use_trailing_stop:
+                        trade["extreme"] = max(trade["extreme"], high)
+                        trail = min(trade["extreme"] - trade["trail_distance"], trade["tp"] - 1e-12)
+                        trade["sl"] = max(trade["sl"], trail)
+                else:
+                    if cfg.use_break_even and low <= trade["entry"] - trade["initial_risk"] * cfg.break_even_trigger_r:
+                        trade["sl"] = min(trade["sl"], trade["entry"])
+                    if cfg.use_trailing_stop:
+                        trade["extreme"] = min(trade["extreme"], low)
+                        trail = max(trade["extreme"] + trade["trail_distance"], trade["tp"] + 1e-12)
+                        trade["sl"] = min(trade["sl"], trail)
         if trade is not None:
             continue
 
