@@ -158,7 +158,7 @@ async def handle_command(text: str, chat_id: str, notifier: TelegramNotifier, st
             "🟢 فرایند ربات فعال است.\n"
             f"شروع ثبت آمار: {store.get_setting('started_at')}\n"
             f"جفت‌ارزهای انتخاب‌شده: {len(store.list_pairs())}\n"
-            "اسکن استراتژی: هنوز وصل نشده\nنمودار بازار: /chart BTC/USDT\nمعامله واقعی: غیرفعال",
+            f"اسکن استراتژی: {'آزمایشی روشن' if os.getenv('SCANNER_ENABLED', 'false').lower() == 'true' else 'خاموش تا اعتبارسنجی'}\nنمودار بازار: /chart BTC/USDT\nمعامله واقعی: غیرفعال",
             chat_id,
         )
     else:
