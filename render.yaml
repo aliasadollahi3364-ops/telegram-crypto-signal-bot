@@ -17,7 +17,7 @@ services:
       - key: SCAN_INTERVAL_SECONDS
         value: "60"
       - key: SCANNER_ENABLED
-        value: "false"
+        value: "true"
       - key: USE_TREND_FILTER
         value: "false"
       - key: USE_SMA200_FILTER
