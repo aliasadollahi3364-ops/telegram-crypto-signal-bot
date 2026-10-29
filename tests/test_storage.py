@@ -65,3 +65,23 @@ def test_same_candle_sl_and_tp_is_conservatively_loss(tmp_path: Path):
     assert closed[0]["exit_label"] == "SL"
     assert closed[0]["result"] == "LOSS"
     assert closed[0]["exit_price"] == 95.0
+
+
+def test_short_trailing_stop_ratchets_down_without_loosening(tmp_path: Path):
+    store = _store(tmp_path)
+    store.record_signal(
+        "ETH/USDT", "SELL", 100.0, 110.0, 70.0,
+        trailing_enabled=True,
+    )
+
+    # Initial risk is 10; low reaches 92, so the short trailing stop becomes 102.
+    assert store.evaluate_candle("ETH/USDT", candle_high=101.0, candle_low=92.0) == []
+    opened = store.open_signals("ETH/USDT")[0]
+    assert opened["stop_loss"] == 102.0
+    assert opened["extreme"] == 92.0
+
+    # A rebound cannot move the stop back up or erase the favorable extreme.
+    assert store.evaluate_candle("ETH/USDT", candle_high=101.0, candle_low=95.0) == []
+    opened = store.open_signals("ETH/USDT")[0]
+    assert opened["stop_loss"] == 102.0
+    assert opened["extreme"] == 92.0
