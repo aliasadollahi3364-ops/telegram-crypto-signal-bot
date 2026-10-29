@@ -258,7 +258,9 @@ def evaluate_latest(
                     "side": side, "entry": entry, "stop_loss": float(sl), "take_profit": float(tp),
                     "timestamp": int(ts.timestamp() * 1000),
                     "choch_price": float(level) if level is not None else None,
-                    "order_blocks": [{"low": bottom, "high": top, "start": 0, "end": len(df)-1,
+                    "order_blocks": [{"low": bottom, "high": top,
+                                      "start": max(0, min(len(df) - 1, int(df["timestamp"].searchsorted(ob["left"])))),
+                                      "end": len(df) - 1,
                                       "label": "Order Block صعودی" if direction == 1 else "Order Block نزولی"}],
                     "fvgs": _valid_fvgs(df.iloc[:i+1]),
                     }
