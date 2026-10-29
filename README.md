@@ -1,43 +1,41 @@
-# WEEX Telegram Crypto Signal Bot
+# ربات سیگنال ارز دیجیتال WEEX در تلگرام
 
-A signals-only Python bot intended to scan eligible WEEX futures markets on 15-minute candles and send strategy alerts to Telegram.
+ربات با هدف اسکن قراردادهای فیوچرز واجد شرایط WEEX در تایم‌فریم ۱۵ دقیقه و ارسال سیگنال به تلگرام ساخته می‌شود. پنل دستورات فارسی است.
 
-## Current status
+## وضعیت فعلی
 
-This repository is the project scaffold. The strategy port and live market-data integration must be tested against the original Pine Script before signals should be treated as equivalent. **No exchange order placement is implemented or enabled.**
+- پنل تلگرام فارسی و دستورات مدیریت جفت‌ارزها پیاده‌سازی اولیه شده است.
+- ثبت آمار سیگنال‌ها با SQLite و دیسک پایدار Render پیکربندی شده است.
+- ماژول رسم تصویر کندل‌ها و نمایش نواحی Order Block، FVG، سطح CHoCH، ورود، حد ضرر و حد سود آماده است؛ این نواحی باید از استراتژی تأییدشده دریافت شوند.
+- **اتصال اسکنر بازار و انتقال کامل منطق Pine Script هنوز تکمیل نشده است.** تا زمان اعتبارسنجی کد اصلی، سیگنال ساختگی تولید نمی‌شود.
+- هیچ سفارش واقعی ارسال نمی‌شود و کلید معاملاتی WEEX لازم نیست.
 
-## Planned components
+## دستورات تلگرام
 
-- Discover eligible futures symbols from public market metadata (target: 300+ symbols if WEEX makes that many available).
-- Fetch 15-minute OHLCV candles.
-- Port the supplied Pine Script logic without adding new entry filters or changing its rules.
-- Send signal messages to Telegram.
-- Add tests for key calculations and candle-close behavior.
+- `/start` یا `/help` — راهنمای فارسی
+- `/pairs` — نمایش جفت‌ارزهای انتخاب‌شده
+- `/add BTC/USDT` — افزودن جفت‌ارز
+- `/remove BTC/USDT` — حذف جفت‌ارز
+- `/stats` — آمار کلی
+- `/stats BTC/USDT` — آمار یک جفت‌ارز
+- `/open` — سیگنال‌های باز ثبت‌شده
+- `/status` — وضعیت سرویس
 
-## Configuration
+## زمان شروع آمار
 
-Set these environment variables in Render (do not commit real tokens):
+سابقه معاملاتی از زمان ساخت پایگاه داده شروع می‌شود. هیچ کندل یا معامله‌ای از گذشته بازار به‌عنوان معامله ربات وارد آمار نمی‌شود. رویدادهای سیگنال و آمار پس از ری‌استارت حفظ می‌شوند، مشروط به اینکه دیسک پایدار Render فعال باشد.
 
-- `TELEGRAM_BOT_TOKEN`: token from BotFather.
-- `TELEGRAM_CHAT_ID`: destination chat or channel ID.
-- `SCAN_INTERVAL_SECONDS`: scan interval (default 60).
+## راه‌اندازی روی Render
 
-## Local setup
+مقادیر محرمانه را فقط در Environment Variables سرویس Render تنظیم کنید:
 
-```bash
-python -m venv .venv
-# Windows: .venv\\Scripts\\activate
-# macOS/Linux: source .venv/bin/activate
-pip install -r requirements.txt
-python main.py
-```
+- `TELEGRAM_BOT_TOKEN`: توکن BotFather
+- `TELEGRAM_CHAT_ID`: شناسه چت مجاز برای کنترل ربات
+- `TIMEFRAME=15m`
+- `DATA_DIR=/var/data`
 
-Copy `.env.example` to `.env` for local development and populate it with your own values. Do not upload secrets to GitHub.
+`render.yaml` یک Background Worker با دیسک پایدار تعریف می‌کند. طرح انتخابی Render و دیسک پایدار ممکن است هزینه داشته باشند؛ قبل از تأیید ساخت سرویس، قیمت را بررسی کنید.
 
-## Deployment
+## تصاویر سیگنال
 
-The included `render.yaml` describes a Render Background Worker. Configure the secret environment variables in the Render dashboard before starting it.
-
-## Safety
-
-This project is for alerts only. It must not submit real orders or require exchange trading API keys. Verify the strategy port against TradingView historical results before relying on alerts.
+تابع رسم نمودار تصویر PNG از کندل‌ها تولید می‌کند و می‌تواند نواحی Order Block و FVG و سطح CHoCH و خطوط ورود/حد ضرر/حد سود را نمایش دهد. فقط داده‌هایی که اسکنر و استراتژی فراهم کنند روی تصویر قرار می‌گیرند؛ ماژول نمودار خودش سیگنال یا ناحیه جعلی ایجاد نمی‌کند.
