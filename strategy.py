@@ -42,7 +42,7 @@ class StrategyConfig:
     sma_length: int = 200
     use_break_even: bool = True
     break_even_trigger_r: float = 1.0
-    use_trailing_stop: bool = False
+    use_trailing_stop: bool = True
     trailing_atr_mult: float = 1.5  # Pine exposes this input but uses fixed initial risk distance instead.
 
 
