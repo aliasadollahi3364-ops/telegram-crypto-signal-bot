@@ -8,6 +8,7 @@ import asyncio
 import logging
 import os
 import tempfile
+import time
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -16,6 +17,7 @@ from dotenv import load_dotenv
 
 from storage import Store
 from charting import render_signal_chart, render_market_chart
+from strategy import StrategyConfig, evaluate_latest
 
 load_dotenv()
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"),
@@ -222,13 +224,21 @@ async def run() -> None:
     store = Store()
     notifier = TelegramNotifier(token, chat_id)
     log.info("Bot online; signals-only; timeframe=%s", timeframe)
+    scanner_enabled = os.getenv("SCANNER_ENABLED", "false").strip().lower() == "true"
+    scan_interval = max(30, int(os.getenv("SCAN_INTERVAL_SECONDS", "60")))
+    market = None
+    if scanner_enabled:
+        from market_data import WeexMarketData
+        market = WeexMarketData()
     await notifier.send(
         "ربات تلگرام WEEX روشن شد.\n"
         "پنل فارسی و ذخیره آمار فعال است.\n"
         "شروع ثبت آمار: " + store.get_setting("started_at") + "\n"
-        "⚠️ اسکن بازار و تولید سیگنال هنوز متصل نشده است؛ پیام ساختگی ارسال نمی‌شود."
+        + ("⚠️ اسکنر آزمایشی روشن است؛ تطبیق با TradingView هنوز باید انجام شود.\nمعامله واقعی غیرفعال است."
+           if scanner_enabled else "اسکنر خاموش است تا منطق با TradingView تطبیق داده شود.\nمعامله واقعی غیرفعال است.")
     )
     offset = int(store.get_setting("telegram_offset", "0"))
+    last_scan = 0.0
     while True:
         try:
             updates = await notifier.updates(offset)
@@ -240,6 +250,39 @@ async def run() -> None:
                 source_chat = str((message.get("chat") or {}).get("id", ""))
                 if incoming.startswith("/"):
                     await handle_command(incoming, source_chat, notifier, store, chat_id)
+            if scanner_enabled and market is not None and time.monotonic() - last_scan >= scan_interval:
+                last_scan = time.monotonic()
+                config = StrategyConfig(
+                    use_trend_filter=os.getenv("USE_TREND_FILTER", "false").lower() == "true",
+                    use_sma200_filter=os.getenv("USE_SMA200_FILTER", "false").lower() == "true",
+                    use_break_even=os.getenv("USE_BREAK_EVEN", "true").lower() == "true",
+                    use_trailing_stop=os.getenv("USE_TRAILING_STOP", "false").lower() == "true",
+                )
+                for requested in store.list_pairs():
+                    try:
+                        candles15 = await market.fetch_ohlcv(requested, timeframe="15m", limit=300)
+                        candles4h = await market.fetch_ohlcv(requested, timeframe="4h", limit=300)
+                        if len(candles15) < 20 or len(candles4h) < 20:
+                            continue
+                        latest_ts = str(int(candles15[-1][0]))
+                        eval_key = "last_eval_candle_" + requested.replace("/", "_").replace(":", "_")
+                        if store.get_setting(eval_key) != latest_ts:
+                            await notify_closed_signals(notifier, store, requested,
+                                                        float(candles15[-1][2]), float(candles15[-1][3]))
+                            store.set_setting(eval_key, latest_ts)
+                        signal = evaluate_latest(candles15, candles4h, config)
+                        if signal:
+                            signal_key = "last_signal_candle_" + requested.replace("/", "_").replace(":", "_")
+                            if store.get_setting(signal_key) != str(signal["timestamp"]):
+                                await send_signal_alert(
+                                    notifier, store, symbol=requested, side=signal["side"],
+                                    entry=signal["entry"], candles=candles15,
+                                    stop_loss=signal["stop_loss"], take_profit=signal["take_profit"],
+                                    order_blocks=signal["order_blocks"], fvgs=signal["fvgs"],
+                                    choch_price=signal["choch_price"], timeframe="15m")
+                                store.set_setting(signal_key, str(signal["timestamp"]))
+                    except Exception:
+                        log.exception("Scanner error for %s", requested)
         except asyncio.CancelledError:
             raise
         except Exception:
