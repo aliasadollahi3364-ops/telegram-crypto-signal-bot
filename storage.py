@@ -176,6 +176,8 @@ class Store:
                     (exit_price - entry) / entry * 100.0
                     if side == "BUY" else (entry - exit_price) / entry * 100.0
                 )
+                # A trailed stop can close profitably; break-even exits are not wins/losses.
+                result = "WIN" if pnl_pct > 1e-12 else ("LOSS" if pnl_pct < -1e-12 else "BREAKEVEN")
                 if self.close_signal(int(row["id"]), exit_price, result, pnl_pct):
                     closed.append({
                         **row, "exit_price": exit_price, "result": result,
