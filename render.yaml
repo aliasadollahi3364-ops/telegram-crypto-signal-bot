@@ -16,6 +16,16 @@ services:
         sync: false
       - key: SCAN_INTERVAL_SECONDS
         value: "60"
+      - key: SCANNER_ENABLED
+        value: "false"
+      - key: USE_TREND_FILTER
+        value: "false"
+      - key: USE_SMA200_FILTER
+        value: "false"
+      - key: USE_BREAK_EVEN
+        value: "true"
+      - key: USE_TRAILING_STOP
+        value: "false"
       - key: TIMEFRAME
         value: 15m
       - key: DATA_DIR
