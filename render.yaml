@@ -5,6 +5,10 @@ services:
     plan: starter
     buildCommand: pip install -r requirements.txt
     startCommand: python main.py
+    disk:
+      name: signal-bot-data
+      mountPath: /var/data
+      sizeGB: 1
     envVars:
       - key: TELEGRAM_BOT_TOKEN
         sync: false
@@ -14,3 +18,5 @@ services:
         value: "60"
       - key: TIMEFRAME
         value: 15m
+      - key: DATA_DIR
+        value: /var/data
