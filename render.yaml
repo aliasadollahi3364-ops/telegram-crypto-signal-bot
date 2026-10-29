@@ -1,0 +1,16 @@
+services:
+  - type: worker
+    name: telegram-crypto-signal-bot
+    runtime: python
+    plan: starter
+    buildCommand: pip install -r requirements.txt
+    startCommand: python main.py
+    envVars:
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT_ID
+        sync: false
+      - key: SCAN_INTERVAL_SECONDS
+        value: "60"
+      - key: TIMEFRAME
+        value: 15m
