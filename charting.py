@@ -39,7 +39,9 @@ def render_signal_chart(
         bottom = min(float(op), float(cl))
         height = max(abs(float(cl) - float(op)), max(abs(float(hi)) * 0.00003, 1e-9))
         ax.add_patch(Rectangle((i - width / 2, bottom), width, height,
-                               fill=True, alpha=0.78, linewidth=0.7))
+                               facecolor=("#16a34a" if rising else "#dc2626"),
+                               edgecolor=("#15803d" if rising else "#b91c1c"),
+                               fill=True, alpha=0.82, linewidth=0.7))
     # Zones are supplied by the strategy adapter; this function does not invent them.
     for zone in order_blocks:
         lo, hi = float(zone["low"]), float(zone["high"])
