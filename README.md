@@ -34,7 +34,7 @@
 - `TIMEFRAME=15m`
 - `DATA_DIR=/var/data`
 - `SCANNER_ENABLED=false` (تا اعتبارسنجی کامل، خاموش بماند)
-- `USE_TREND_FILTER=false`, `USE_SMA200_FILTER=false`, `USE_BREAK_EVEN=true`, `USE_TRAILING_STOP=false`
+- `USE_TREND_FILTER=false`, `USE_SMA200_FILTER=false`, `USE_BREAK_EVEN=true`, `USE_TRAILING_STOP=true`
 
 `render.yaml` یک Background Worker با دیسک پایدار تعریف می‌کند. طرح انتخابی Render و دیسک پایدار ممکن است هزینه داشته باشند؛ قبل از تأیید ساخت سرویس، قیمت را بررسی کنید.
 
