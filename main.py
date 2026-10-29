@@ -176,7 +176,8 @@ async def send_signal_alert(
     """Called by the validated strategy adapter when a genuinely new signal appears."""
     path = str(Path(tempfile.gettempdir()) / f"weex_signal_{symbol.replace('/', '_')}_{side.lower()}.png")
     render_signal_chart(candles, symbol, timeframe, side, entry, stop_loss, take_profit,
-                        order_blocks, fvgs, choch_price, path)
+                        order_blocks, fvgs, choch_price, path,
+                        trailing_enabled=trailing_enabled)
     signal_id = store.record_signal(
         symbol, side, entry, stop_loss, take_profit, path,
         break_even_enabled=break_even_enabled, trailing_enabled=trailing_enabled,
