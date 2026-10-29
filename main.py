@@ -31,14 +31,28 @@ class TelegramNotifier:
         self.chat_id = str(chat_id)
         self.base = f"https://api.telegram.org/bot{token}"
 
-    async def send(self, message: str, chat_id: str | None = None) -> None:
+    async def send(self, message: str, chat_id: str | None = None,
+                   reply_markup: dict[str, Any] | None = None) -> None:
+        payload: dict[str, Any] = {"chat_id": chat_id or self.chat_id, "text": message}
+        if reply_markup is not None:
+            payload["reply_markup"] = reply_markup
         async with httpx.AsyncClient(timeout=25) as client:
-            response = await client.post(f"{self.base}/sendMessage",
-                json={"chat_id": chat_id or self.chat_id, "text": message})
+            response = await client.post(f"{self.base}/sendMessage", json=payload)
             response.raise_for_status()
             data = response.json()
             if not data.get("ok"):
                 raise RuntimeError(f"Telegram rejected message: {data!r}")
+
+    async def answer_callback(self, callback_id: str, text: str = "") -> None:
+        async with httpx.AsyncClient(timeout=15) as client:
+            response = await client.post(
+                f"{self.base}/answerCallbackQuery",
+                json={"callback_query_id": callback_id, "text": text[:200]},
+            )
+            response.raise_for_status()
+            data = response.json()
+            if not data.get("ok"):
+                raise RuntimeError(f"Telegram rejected callback answer: {data!r}")
 
     async def send_photo(self, path: str, caption: str, chat_id: str | None = None) -> None:
         async with httpx.AsyncClient(timeout=45) as client:
@@ -56,7 +70,7 @@ class TelegramNotifier:
     async def updates(self, offset: int) -> list[dict[str, Any]]:
         async with httpx.AsyncClient(timeout=40) as client:
             response = await client.get(f"{self.base}/getUpdates",
-                params={"offset": offset, "timeout": 25, "allowed_updates": '["message"]'})
+                params={"offset": offset, "timeout": 25, "allowed_updates": '["message","callback_query"]'})
             response.raise_for_status()
             data = response.json()
             if not data.get("ok"):
@@ -76,8 +90,42 @@ def fmt_stats(stats: dict[str, Any], title: str = "کل ربات") -> str:
     )
 
 
+def setting_bool(store: Store, key: str, env_name: str, default: bool) -> bool:
+    """Persistent Telegram setting takes precedence over the environment default."""
+    fallback = os.getenv(env_name, str(default).lower()).strip().lower() == "true"
+    value = store.get_setting("user_" + key, "")
+    return fallback if value == "" else value.lower() == "true"
+
+
+def settings_keyboard(store: Store) -> dict[str, Any]:
+    sma = setting_bool(store, "sma200", "USE_SMA200_FILTER", False)
+    be = setting_bool(store, "break_even", "USE_BREAK_EVEN", True)
+    trail = setting_bool(store, "trailing_stop", "USE_TRAILING_STOP", True)
+    return {"inline_keyboard": [
+        [{"text": f"📈 فیلتر SMA200: {'روشن ✅' if sma else 'خاموش ❌'}",
+          "callback_data": "settings:toggle:sma200"}],
+        [{"text": f"🟰 استاپ سر‌به‌سر: {'روشن ✅' if be else 'خاموش ❌'}",
+          "callback_data": "settings:toggle:break_even"}],
+        [{"text": f"🛑 استاپ شناور: {'روشن ✅' if trail else 'خاموش ❌'}",
+          "callback_data": "settings:toggle:trailing_stop"}],
+        [{"text": "📊 جفت‌ارزهای انتخاب‌شده", "callback_data": "settings:pairs"}],
+        [{"text": "📉 نمودار BTC/USDT", "callback_data": "settings:chart"}],
+    ]}
+
+
+async def show_settings(chat_id: str, notifier: TelegramNotifier, store: Store) -> None:
+    text = (
+        "⚙️ تنظیمات دستی ربات WEEX\n\n"
+        "با زدن دکمه‌ها، گزینه‌ها روشن/خاموش می‌شوند و در پایگاه داده ذخیره می‌مانند.\n"
+        "تایم‌فریم اسکن فعلاً ۱۵ دقیقه است و در این نسخه قابل تغییر نیست.\n"
+        "حجم معامله واقعی در این نسخه کاربردی ندارد؛ ارسال سفارش واقعی غیرفعال است."
+    )
+    await notifier.send(text, chat_id, settings_keyboard(store))
+
+
 HELP = (
     "🇮🇷 راهنمای پنل ربات WEEX\n\n"
+    "/settings — تنظیمات دستی با دکمه‌های فارسی\n"
     "/pairs — نمایش جفت‌ارزهای انتخاب‌شده\n"
     "/add BTC/USDT — افزودن جفت‌ارز\n"
     "/remove BTC/USDT — حذف جفت‌ارز\n"
@@ -106,6 +154,10 @@ async def handle_command(text: str, chat_id: str, notifier: TelegramNotifier, st
 
     if command in ("/start", "/help"):
         await notifier.send(HELP, chat_id)
+        if command == "/start":
+            await show_settings(chat_id, notifier, store)
+    elif command == "/settings":
+        await show_settings(chat_id, notifier, store)
     elif command == "/pairs":
         pairs = store.list_pairs()
         await notifier.send("📌 جفت‌ارزهای انتخاب‌شده:\n" + ("\n".join(pairs) if pairs else "هنوز جفت‌ارزی انتخاب نشده است.\nمثال: /add BTC/USDT"), chat_id)
@@ -158,7 +210,11 @@ async def handle_command(text: str, chat_id: str, notifier: TelegramNotifier, st
             "🟢 فرایند ربات فعال است.\n"
             f"شروع ثبت آمار: {store.get_setting('started_at')}\n"
             f"جفت‌ارزهای انتخاب‌شده: {len(store.list_pairs())}\n"
-            f"اسکن استراتژی: {'آزمایشی روشن' if os.getenv('SCANNER_ENABLED', 'true').lower() == 'true' else 'خاموش در تنظیمات سرویس'}\nنمودار بازار: /chart BTC/USDT\nمعامله واقعی: غیرفعال",
+            f"اسکن استراتژی: {'آزمایشی روشن' if os.getenv('SCANNER_ENABLED', 'true').lower() == 'true' else 'خاموش در تنظیمات سرویس'}\n"
+            f"SMA200: {'روشن' if setting_bool(store, 'sma200', 'USE_SMA200_FILTER', False) else 'خاموش'}\n"
+            f"استاپ سر‌به‌سر: {'روشن' if setting_bool(store, 'break_even', 'USE_BREAK_EVEN', True) else 'خاموش'}\n"
+            f"استاپ شناور: {'روشن' if setting_bool(store, 'trailing_stop', 'USE_TRAILING_STOP', True) else 'خاموش'}\n"
+            "نمودار بازار: /chart BTC/USDT\nمعامله واقعی: غیرفعال",
             chat_id,
         )
     else:
@@ -250,6 +306,48 @@ async def run() -> None:
             for update in updates:
                 offset = max(offset, int(update["update_id"]) + 1)
                 store.set_setting("telegram_offset", str(offset))
+                callback = update.get("callback_query")
+                if callback:
+                    source_chat = str(((callback.get("message") or {}).get("chat") or {}).get("id", ""))
+                    if source_chat == str(chat_id):
+                        data = str(callback.get("data", ""))
+                        try:
+                            if data == "settings:menu":
+                                await show_settings(source_chat, notifier, store)
+                                await notifier.answer_callback(str(callback["id"]))
+                            elif data == "settings:pairs":
+                                pairs = store.list_pairs()
+                                await notifier.send(
+                                    "📌 جفت‌ارزهای انتخاب‌شده:\n" + ("\n".join(pairs) if pairs else "فهرست خالی است.")
+                                    + "\n\nبرای افزودن/حذف از دستورهای /add BTC/USDT و /remove BTC/USDT استفاده کن.",
+                                    source_chat,
+                                    {"inline_keyboard": [[{"text": "⬅️ بازگشت به تنظیمات", "callback_data": "settings:menu"}]]},
+                                )
+                                await notifier.answer_callback(str(callback["id"]))
+                            elif data == "settings:chart":
+                                await notifier.answer_callback(str(callback["id"]), "در حال ساخت نمودار...")
+                                await handle_command("/chart BTC/USDT", source_chat, notifier, store, chat_id)
+                            elif data.startswith("settings:toggle:"):
+                                key = data.rsplit(":", 1)[1]
+                                config_map = {
+                                    "sma200": ("USE_SMA200_FILTER", False, "فیلتر SMA200"),
+                                    "break_even": ("USE_BREAK_EVEN", True, "استاپ سر‌به‌سر"),
+                                    "trailing_stop": ("USE_TRAILING_STOP", True, "استاپ شناور"),
+                                }
+                                if key not in config_map:
+                                    await notifier.answer_callback(str(callback["id"]), "گزینه نامعتبر است.")
+                                else:
+                                    env_name, default, label = config_map[key]
+                                    current = setting_bool(store, key, env_name, default)
+                                    store.set_setting("user_" + key, str(not current).lower())
+                                    await notifier.answer_callback(str(callback["id"]), f"{label}: {'روشن' if not current else 'خاموش'}")
+                                    await show_settings(source_chat, notifier, store)
+                            else:
+                                await notifier.answer_callback(str(callback["id"]))
+                        except Exception:
+                            log.exception("Settings callback failed")
+                            await notifier.answer_callback(str(callback.get("id", "")), "خطا؛ دوباره تلاش کن.")
+                    continue
                 message = update.get("message") or {}
                 incoming = message.get("text", "")
                 source_chat = str((message.get("chat") or {}).get("id", ""))
@@ -259,9 +357,9 @@ async def run() -> None:
                 last_scan = time.monotonic()
                 config = StrategyConfig(
                     use_trend_filter=os.getenv("USE_TREND_FILTER", "false").lower() == "true",
-                    use_sma200_filter=os.getenv("USE_SMA200_FILTER", "false").lower() == "true",
-                    use_break_even=os.getenv("USE_BREAK_EVEN", "true").lower() == "true",
-                    use_trailing_stop=os.getenv("USE_TRAILING_STOP", "true").lower() == "true",
+                    use_sma200_filter=setting_bool(store, "sma200", "USE_SMA200_FILTER", False),
+                    use_break_even=setting_bool(store, "break_even", "USE_BREAK_EVEN", True),
+                    use_trailing_stop=setting_bool(store, "trailing_stop", "USE_TRAILING_STOP", True),
                 )
                 for requested in store.list_pairs():
                     try:
