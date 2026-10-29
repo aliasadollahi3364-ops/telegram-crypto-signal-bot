@@ -98,6 +98,41 @@ class Store:
                 WHERE id=? AND status='OPEN'""", (now_iso(), exit_price, result, pnl_pct, signal_id))
             return cur.rowcount > 0
 
+    def evaluate_candle(self, symbol: str, candle_high: float, candle_low: float) -> list[dict[str, Any]]:
+        """Close open paper-signals when their TP/SL is touched by a newly observed candle.
+        If both TP and SL fall inside the same candle and order is unknowable, conservatively
+        count the stop-loss first to avoid overstating results.
+        """
+        closed: list[dict[str, Any]] = []
+        for row in self.open_signals(symbol):
+            side = row["side"].upper()
+            sl, tp = row["stop_loss"], row["take_profit"]
+            sl_hit = sl is not None and (
+                (side == "BUY" and candle_low <= sl) or
+                (side == "SELL" and candle_high >= sl)
+            )
+            tp_hit = tp is not None and (
+                (side == "BUY" and candle_high >= tp) or
+                (side == "SELL" and candle_low <= tp)
+            )
+            if not sl_hit and not tp_hit:
+                continue
+            # Conservative tie-break: if both levels are inside one OHLC candle, SL wins.
+            if sl_hit:
+                exit_price = float(sl)
+                result = "LOSS"
+                label = "SL"
+            else:
+                exit_price = float(tp)
+                result = "WIN"
+                label = "TP"
+            entry = float(row["entry"])
+            pnl_pct = ((exit_price - entry) / entry * 100.0) if side == "BUY" else ((entry - exit_price) / entry * 100.0)
+            if self.close_signal(int(row["id"]), exit_price, result, pnl_pct):
+                closed.append({**row, "exit_price": exit_price, "result": result,
+                               "pnl_pct": pnl_pct, "exit_label": label})
+        return closed
+
     def stats(self, symbol: str | None = None) -> dict[str, Any]:
         with self._connect() as c:
             where = "WHERE symbol=?" if symbol else ""
