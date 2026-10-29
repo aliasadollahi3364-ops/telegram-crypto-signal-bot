@@ -17,6 +17,7 @@ def render_signal_chart(
     fvgs: Sequence[dict[str, Any]] = (),
     choch_price: float | None = None,
     output_path: str = "/tmp/weex_signal.png",
+    trailing_enabled: bool = False,
 ) -> str:
     """Render OHLCV candles and provided overlays. Expects [timestamp, open, high, low, close, volume]."""
     if len(candles) < 3:
@@ -55,7 +56,8 @@ def render_signal_chart(
         ax.axhspan(lo, hi, alpha=0.10, label=str(zone.get("label", "FVG")))
     ax.axhline(float(entry), linewidth=1.5, linestyle="-", label=f"Entry {entry:g}")
     if stop_loss is not None:
-        ax.axhline(float(stop_loss), linewidth=1.2, linestyle="--", label=f"SL {stop_loss:g}")
+        sl_label = f"SL / استاپ شناور اولیه {stop_loss:g}" if trailing_enabled else f"SL {stop_loss:g}"
+        ax.axhline(float(stop_loss), linewidth=1.2, linestyle="--", label=sl_label)
     if take_profit is not None:
         ax.axhline(float(take_profit), linewidth=1.2, linestyle="--", label=f"TP {take_profit:g}")
     if choch_price is not None:
