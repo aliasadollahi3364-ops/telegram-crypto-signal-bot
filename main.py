@@ -83,6 +83,7 @@ HELP = (
     "/stats BTC/USDT — آمار یک جفت‌ارز\n"
     "/open — نمایش سیگنال‌های باز\n"
     "/status — وضعیت ربات\n"
+    "/chart BTC/USDT — نمودار تازه بازار\n"
     "/help — راهنما\n\n"
     "توجه: اتصال اسکنر و تولید سیگنال هنوز در حال پیاده‌سازی است؛ "
     "تا آن زمان هیچ سیگنال ساختگی ثبت نمی‌شود و معامله واقعی انجام نمی‌شود."
@@ -129,12 +130,33 @@ async def handle_command(text: str, chat_id: str, notifier: TelegramNotifier, st
             for row in rows[:30]:
                 lines.append(f"#{row['id']} {row['symbol']} {row['side']} | ورود: {row['entry']} | حدضرر: {row['stop_loss']} | حدسود: {row['take_profit']}")
             await notifier.send("\n".join(lines), chat_id)
+    elif command in ("/chart", "/live"):
+        if not arg or "/" not in arg:
+            await notifier.send("فرمت درست: /chart BTC/USDT", chat_id)
+        else:
+            from market_data import WeexMarketData
+            market = WeexMarketData()
+            try:
+                candles = await market.fetch_ohlcv(arg, timeframe="15m", limit=100)
+                safe_name = arg.replace("/", "_").replace(":", "_")
+                path = str(Path(tempfile.gettempdir()) / f"weex_market_{safe_name}.png")
+                render_market_chart(candles, arg, "15m", path)
+                last = float(candles[-1][4])
+                caption = (f"📈 نمودار تازه WEEX | {arg}\n"
+                           f"تایم‌فریم: ۱۵ دقیقه\nآخرین کندل تأییدشده: {last:g}\n"
+                           "تصویر هنگام درخواست ساخته شده؛ در تلگرام به‌صورت خودکار به‌روزرسانی نمی‌شود.")
+                await notifier.send_photo(path, caption, chat_id)
+            except Exception as exc:
+                log.exception("Unable to create market chart for %s", arg)
+                await notifier.send(f"❌ دریافت نمودار {arg} ناموفق بود. نماد را بررسی کن و دوباره تلاش کن.\nجزئیات: {str(exc)[:250]}", chat_id)
+            finally:
+                await market.close()
     elif command == "/status":
         await notifier.send(
             "🟢 فرایند ربات فعال است.\n"
             f"شروع ثبت آمار: {store.get_setting('started_at')}\n"
             f"جفت‌ارزهای انتخاب‌شده: {len(store.list_pairs())}\n"
-            "اسکن بازار: هنوز وصل نشده\nمعامله واقعی: غیرفعال",
+            "اسکن استراتژی: هنوز وصل نشده\nنمودار بازار: /chart BTC/USDT\nمعامله واقعی: غیرفعال",
             chat_id,
         )
     else:
