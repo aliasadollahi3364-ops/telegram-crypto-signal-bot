@@ -329,6 +329,8 @@ async def run() -> None:
         raise RuntimeError("This project is configured for the requested 15m timeframe.")
 
     store = Store()
+    # Keep the TradingView SMA200 entry filter disabled; the chart line remains display-only.
+    store.set_setting("user_sma200", "false")
     notifier = TelegramNotifier(token, chat_id)
     log.info("Bot online; signals-only; timeframe=%s", timeframe)
     scanner_enabled = os.getenv("SCANNER_ENABLED", "true").strip().lower() == "true"
