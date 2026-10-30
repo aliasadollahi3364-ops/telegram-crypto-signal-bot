@@ -300,7 +300,9 @@ async def handle_command(text: str, chat_id: str, notifier: TelegramNotifier, st
             f"SMA200: {'روشن' if setting_bool(store, 'sma200', 'USE_SMA200_FILTER', False) else 'خاموش'}\n"
             f"استاپ سر‌به‌سر: {'روشن' if setting_bool(store, 'break_even', 'USE_BREAK_EVEN', True) else 'خاموش'}\n"
             f"استاپ شناور: {'روشن' if setting_bool(store, 'trailing_stop', 'USE_TRAILING_STOP', True) else 'خاموش'}\n"
-            "نمودار بازار: /chart BTC/USDT\nمعامله واقعی: غیرفعال",
+            f"حساب دمو: موجودی {store.demo_summary()['equity']:.2f}$ | مارجین هر معامله {store.demo_summary()['margin_per_trade']:.2f}$ | اهرم {store.demo_summary()['leverage']:g}x\n"
+            "وضعیت دمو: فعال | معامله واقعی: غیرفعال\n"
+            "نمودار بازار: /chart BTC/USDT",
             chat_id,
         )
     else:
