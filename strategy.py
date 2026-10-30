@@ -23,7 +23,7 @@ class StrategyConfig:
     pivot15: int = 3
     max_wait: int = 17
     atr_len: int = 7
-    use_trend_filter: bool = False
+    use_trend_filter: bool = True
     require_ob_touch: bool = True
     use_touch_freshness: bool = True
     max_bars_since_touch: int = 14
