@@ -135,8 +135,9 @@ HELP = (
     "/status — وضعیت ربات\n"
     "/chart BTC/USDT — نمودار تازه بازار\n"
     "/help — راهنما\n\n"
-    "توجه: اتصال اسکنر و تولید سیگنال هنوز در حال پیاده‌سازی است؛ "
-    "تا آن زمان هیچ سیگنال ساختگی ثبت نمی‌شود و معامله واقعی انجام نمی‌شود."
+    "حساب دمو داخلی: /demo | تغییر مارجین: /demo_size 5 | تغییر اهرم: /demo_leverage 5\\n"
+    "سیگنال‌های جدید در صورت کافی بودن مارجین، به‌صورت شبیه‌سازی‌شده وارد حساب دمو می‌شوند. "
+    "هیچ سفارش واقعی ارسال نمی‌شود."
 )
 
 
@@ -196,6 +197,45 @@ async def handle_command(text: str, chat_id: str, notifier: TelegramNotifier, st
                 symbol = f"{base}/USDT"
                 removed = store.remove_pair(symbol)
                 await notifier.send(("🗑 حذف شد: " if removed else "این جفت‌ارز در فهرست نبود: ") + symbol, chat_id)
+    elif command == "/demo":
+        d = store.demo_summary()
+        await notifier.send(
+            "🧪 حساب دمو داخلی (بدون سفارش واقعی)\\n"
+            f"موجودی اولیه: {d['initial']:.2f}$\\n"
+            f"سود/ضرر قطعی: {d['realized']:+.4f}$\\n"
+            f"سود/ضرر شناور: {d['floating']:+.4f}$\\n"
+            f"ارزش کل حساب: {d['equity']:.4f}$\\n"
+            f"مارجین درگیر: {d['used_margin']:.2f}$\\n"
+            f"مارجین آزاد: {d['free_margin']:.4f}$\\n"
+            f"پوزیشن‌های دمو باز: {d['open_count']}\\n"
+            f"هر معامله: {d['margin_per_trade']:.2f}$ مارجین × {d['leverage']:.2f} اهرم = {d['notional']:.2f}$ ارزش معامله",
+            chat_id)
+    elif command == "/demo_size":
+        if not arg:
+            d = store.demo_summary()
+            await notifier.send(f"مبلغ مارجین فعلی هر معامله: {d['margin_per_trade']:.2f}$\\nتغییر: /demo_size 5", chat_id)
+        else:
+            try:
+                value = float(arg)
+                if not 0.5 <= value <= 100:
+                    raise ValueError()
+                store.set_demo_parameter("demo_margin_per_trade", value)
+                await notifier.send(f"✅ مارجین هر معامله دمو روی {value:g}$ تنظیم شد. پوزیشن‌های باز قبلی تغییر نمی‌کنند.", chat_id)
+            except ValueError:
+                await notifier.send("❌ مقدار معتبر نیست. بازه مجاز 0.5 تا 100 دلار است.", chat_id)
+    elif command == "/demo_leverage":
+        if not arg:
+            d = store.demo_summary()
+            await notifier.send(f"اهرم فعلی دمو: {d['leverage']:g}\\nتغییر: /demo_leverage 5", chat_id)
+        else:
+            try:
+                value = float(arg)
+                if not 1 <= value <= 20:
+                    raise ValueError()
+                store.set_demo_parameter("demo_leverage", value)
+                await notifier.send(f"✅ اهرم دمو روی {value:g}x تنظیم شد. پوزیشن‌های باز قبلی تغییر نمی‌کنند.", chat_id)
+            except ValueError:
+                await notifier.send("❌ اهرم باید بین 1 تا 20 باشد.", chat_id)
     elif command == "/stats":
         await notifier.send(fmt_stats(store.stats(arg or None), arg or "کل ربات"), chat_id)
     elif command == "/open":
@@ -303,12 +343,13 @@ async def notify_closed_signals(
     candle_high: float, candle_low: float,
 ) -> int:
     """Call once for each newly closed 15m candle, after the signal is already recorded."""
-    closed = store.evaluate_candle(symbol, candle_high, candle_low)
+    closed = store.evaluate_candle(symbol, candle_high, candle_low, candle_close=None)
     for row in closed:
         pnl_pct = float(row["pnl_pct"])
-        # Demo sizing: $5 margin × 5x leverage = $25 notional.
-        # Gross estimate only; trading fees and funding are not deducted here.
-        pnl_usd = 25.0 * pnl_pct / 100.0
+        # Realized demo PnL is persisted by Store for positions actually opened in demo.
+        pnl_usd = row.get("demo_pnl_usd")
+        if pnl_usd is None:
+            pnl_usd = 0.0
         if pnl_usd > 1e-10:
             emoji, outcome = "🟢", "سود"
         elif pnl_usd < -1e-10:
@@ -428,8 +469,19 @@ async def run() -> None:
                         latest_ts = str(int(candles15[-1][0]))
                         eval_key = "last_eval_candle_" + requested.replace("/", "_").replace(":", "_")
                         if store.get_setting(eval_key) != latest_ts:
-                            await notify_closed_signals(notifier, store, requested,
-                                                        float(candles15[-1][2]), float(candles15[-1][3]))
+                            closed_rows = store.evaluate_candle(requested, float(candles15[-1][2]),
+                                                                float(candles15[-1][3]), float(candles15[-1][4]))
+                            for row in closed_rows:
+                                pnl_pct = float(row["pnl_pct"])
+                                pnl_usd = row.get("demo_pnl_usd")
+                                emoji = "🟢" if (pnl_usd or 0) > 0 else ("🔴" if (pnl_usd or 0) < 0 else "🟡")
+                                title = "حد سود فعال شد" if row["exit_label"] == "TP" else "حد ضرر فعال شد"
+                                await notifier.send(
+                                    f"{emoji} {title} | {row['symbol']}\\nشماره: #{row['id']}\\n"
+                                    f"ورود: {row['entry']} | خروج: {row['exit_price']}\\n"
+                                    f"نتیجه دمو: {(pnl_usd or 0):+.4f}$ ({pnl_pct:+.3f}%)\\n"
+                                    "کارمزد و فاندینگ فعلاً محاسبه نشده؛ سفارش واقعی ارسال نشده."
+                                )
                             store.set_setting(eval_key, latest_ts)
                         signal = evaluate_latest(candles15, candles4h, config)
                         if signal:
