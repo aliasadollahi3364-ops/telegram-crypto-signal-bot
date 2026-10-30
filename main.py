@@ -223,7 +223,7 @@ async def handle_command(text: str, chat_id: str, notifier: TelegramNotifier, st
                 sma_series = closes.rolling(200, min_periods=200).mean()
                 sma_values = [None if pd.isna(v) else float(v) for v in sma_series]
                 cfg = StrategyConfig(
-                    use_trend_filter=os.getenv("USE_TREND_FILTER", "true").lower() == "true",
+                    use_trend_filter=True,
                     use_sma200_filter=setting_bool(store, "sma200", "USE_SMA200_FILTER", False),
                     use_break_even=setting_bool(store, "break_even", "USE_BREAK_EVEN", True),
                     use_trailing_stop=setting_bool(store, "trailing_stop", "USE_TRAILING_STOP", True),
@@ -397,7 +397,7 @@ async def run() -> None:
             if scanner_enabled and market is not None and time.monotonic() - last_scan >= scan_interval:
                 last_scan = time.monotonic()
                 config = StrategyConfig(
-                    use_trend_filter=os.getenv("USE_TREND_FILTER", "true").lower() == "true",
+                    use_trend_filter=True,
                     use_sma200_filter=setting_bool(store, "sma200", "USE_SMA200_FILTER", False),
                     use_break_even=setting_bool(store, "break_even", "USE_BREAK_EVEN", True),
                     use_trailing_stop=setting_bool(store, "trailing_stop", "USE_TRAILING_STOP", True),
