@@ -60,6 +60,12 @@ class Store:
                 "break_even_enabled": "INTEGER NOT NULL DEFAULT 0",
                 "trailing_enabled": "INTEGER NOT NULL DEFAULT 0",
                 "trail_distance": "REAL",
+                "demo_enabled": "INTEGER NOT NULL DEFAULT 0",
+                "demo_margin": "REAL",
+                "demo_leverage": "REAL",
+                "demo_notional": "REAL",
+                "demo_pnl_usd": "REAL",
+                "mark_price": "REAL",
             }
             for name, sql_type in migrations.items():
                 if name not in columns:
@@ -68,6 +74,10 @@ class Store:
             # are imported as trades; only signal events recorded after this point count.
             c.execute("INSERT OR IGNORE INTO settings(key,value) VALUES('started_at',?)", (now_iso(),))
             c.execute("INSERT OR IGNORE INTO settings(key,value) VALUES('telegram_offset','0')")
+            c.execute("INSERT OR IGNORE INTO settings(key,value) VALUES('demo_initial_balance','100')")
+            c.execute("INSERT OR IGNORE INTO settings(key,value) VALUES('demo_realized_pnl','0')")
+            c.execute("INSERT OR IGNORE INTO settings(key,value) VALUES('demo_margin_per_trade','5')")
+            c.execute("INSERT OR IGNORE INTO settings(key,value) VALUES('demo_leverage','5')")
 
     def get_setting(self, key: str, default: str = "") -> str:
         with self._connect() as c:
@@ -105,21 +115,39 @@ class Store:
         take_profit: float | None, chart_path: str | None = None,
         *, break_even_enabled: bool = False, trailing_enabled: bool = False,
     ) -> int:
+        """Record a signal and open a simulated position only when demo margin is available."""
         normalized_side = side.upper()
         risk = None if stop_loss is None else (
             entry - stop_loss if normalized_side == "BUY" else stop_loss - entry
         )
         valid_risk = risk is not None and risk > 0
         with self._connect() as c:
+            settings = {r["key"]: r["value"] for r in c.execute(
+                "SELECT key,value FROM settings WHERE key IN "
+                "('demo_initial_balance','demo_realized_pnl','demo_margin_per_trade','demo_leverage')"
+            )}
+            initial = float(settings.get("demo_initial_balance", "100"))
+            realized = float(settings.get("demo_realized_pnl", "0"))
+            margin = float(settings.get("demo_margin_per_trade", "5"))
+            leverage = float(settings.get("demo_leverage", "5"))
+            used = float(c.execute(
+                "SELECT COALESCE(SUM(demo_margin),0) FROM signals "
+                "WHERE status='OPEN' AND demo_enabled=1"
+            ).fetchone()[0] or 0)
+            demo_enabled = valid_risk and margin > 0 and leverage > 0 and (initial + realized - used >= margin)
+            notional = margin * leverage if demo_enabled else None
             cur = c.execute("""INSERT INTO signals
                 (symbol,side,created_at,entry,stop_loss,take_profit,chart_path,
                  initial_stop_loss,initial_risk,extreme,break_even_enabled,
-                 trailing_enabled,trail_distance)
-                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                 trailing_enabled,trail_distance,demo_enabled,demo_margin,
+                 demo_leverage,demo_notional,demo_pnl_usd,mark_price)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (symbol, normalized_side, now_iso(), entry, stop_loss, take_profit,
                  chart_path, stop_loss, risk if valid_risk else None, entry,
                  int(break_even_enabled and valid_risk), int(trailing_enabled and valid_risk),
-                 risk if valid_risk else None))
+                 risk if valid_risk else None, int(demo_enabled),
+                 margin if demo_enabled else None, leverage if demo_enabled else None,
+                 notional, 0.0 if demo_enabled else None, entry if demo_enabled else None))
             return int(cur.lastrowid)
 
     def open_signals(self, symbol: str | None = None) -> list[dict[str, Any]]:
@@ -144,7 +172,8 @@ class Store:
             return cur.rowcount > 0
 
     def evaluate_candle(
-        self, symbol: str, candle_high: float, candle_low: float
+        self, symbol: str, candle_high: float, candle_low: float,
+        candle_close: float | None = None,
     ) -> list[dict[str, Any]]:
         """Evaluate a newly closed candle for paper positions.
 
@@ -179,12 +208,33 @@ class Store:
                 # A trailed stop can close profitably; break-even exits are not wins/losses.
                 result = "WIN" if pnl_pct > 1e-12 else ("LOSS" if pnl_pct < -1e-12 else "BREAKEVEN")
                 if self.close_signal(int(row["id"]), exit_price, result, pnl_pct):
+                    demo_pnl = None
+                    if row.get("demo_enabled"):
+                        demo_pnl = float(row["demo_notional"] or 0) * pnl_pct / 100.0
+                        with self._connect() as c:
+                            current = c.execute(
+                                "SELECT value FROM settings WHERE key='demo_realized_pnl'"
+                            ).fetchone()
+                            total = float(current["value"]) if current else 0.0
+                            c.execute(
+                                "INSERT INTO settings(key,value) VALUES('demo_realized_pnl',?) "
+                                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                                (str(total + demo_pnl),),
+                            )
+                            c.execute("UPDATE signals SET demo_pnl_usd=? WHERE id=?",
+                                      (demo_pnl, int(row["id"])))
                     closed.append({
                         **row, "exit_price": exit_price, "result": result,
                         "pnl_pct": pnl_pct, "exit_label": label,
+                        "demo_pnl_usd": demo_pnl,
                     })
                 continue
 
+            # Track the latest closed-candle price for floating demo PnL.
+            if row.get("demo_enabled") and candle_close is not None:
+                with self._connect() as c:
+                    c.execute("UPDATE signals SET mark_price=? WHERE id=? AND status='OPEN'",
+                              (float(candle_close), int(row["id"])))
             # Stops can only ratchet toward profit; never loosen the existing stop.
             entry = float(row["entry"])
             current_sl = float(sl) if sl is not None else None
@@ -224,6 +274,48 @@ class Store:
                         (new_sl, new_extreme, row["id"]),
                     )
         return closed
+
+    def demo_summary(self) -> dict[str, Any]:
+        with self._connect() as c:
+            settings = {r["key"]: r["value"] for r in c.execute(
+                "SELECT key,value FROM settings WHERE key IN "
+                "('demo_initial_balance','demo_realized_pnl','demo_margin_per_trade','demo_leverage')"
+            )}
+            initial = float(settings.get("demo_initial_balance", "100"))
+            realized = float(settings.get("demo_realized_pnl", "0"))
+            margin_per_trade = float(settings.get("demo_margin_per_trade", "5"))
+            leverage = float(settings.get("demo_leverage", "5"))
+            rows = c.execute(
+                "SELECT side,entry,mark_price,demo_notional,demo_margin FROM signals "
+                "WHERE status='OPEN' AND demo_enabled=1"
+            ).fetchall()
+            used_margin = sum(float(r["demo_margin"] or 0) for r in rows)
+            floating = 0.0
+            for r in rows:
+                mark = float(r["mark_price"] or r["entry"])
+                entry = float(r["entry"])
+                pct = ((mark-entry)/entry*100.0 if r["side"] == "BUY"
+                       else (entry-mark)/entry*100.0)
+                floating += float(r["demo_notional"] or 0) * pct / 100.0
+            equity = initial + realized + floating
+            return {
+                "initial": initial, "realized": realized, "floating": floating,
+                "equity": equity, "used_margin": used_margin,
+                "free_margin": equity - used_margin,
+                "open_count": len(rows), "margin_per_trade": margin_per_trade,
+                "leverage": leverage, "notional": margin_per_trade * leverage,
+            }
+
+    def set_demo_parameter(self, key: str, value: float) -> None:
+        allowed = {"demo_margin_per_trade", "demo_leverage"}
+        if key not in allowed:
+            raise ValueError("Unsupported demo parameter")
+        with self._connect() as c:
+            c.execute(
+                "INSERT INTO settings(key,value) VALUES(?,?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (key, str(float(value))),
+            )
 
     def stats(self, symbol: str | None = None) -> dict[str, Any]:
         with self._connect() as c:
