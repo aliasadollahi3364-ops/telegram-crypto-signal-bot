@@ -205,7 +205,12 @@ async def handle_command(text: str, chat_id: str, notifier: TelegramNotifier, st
         else:
             lines = ["📂 سیگنال‌های باز ثبت‌شده:"]
             for row in rows[:30]:
-                lines.append(f"#{row['id']} {row['symbol']} {row['side']} | ورود: {row['entry']} | حدضرر: {row['stop_loss']} | حدسود: {row['take_profit']}")
+                opened_at = str(row.get("created_at") or "نامشخص").replace("T", " ").replace("+00:00", " UTC")
+                lines.append(
+                    f"#{row['id']} {row['symbol']} {row['side']}\\n"
+                    f"زمان باز شدن: {opened_at}\\n"
+                    f"ورود: {row['entry']} | حدضرر: {row['stop_loss']} | حدسود: {row['take_profit']}"
+                )
             await notifier.send("\n".join(lines), chat_id)
     elif command in ("/chart", "/live"):
         if not arg or "/" not in arg:
