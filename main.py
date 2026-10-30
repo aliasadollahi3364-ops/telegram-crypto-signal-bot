@@ -135,7 +135,7 @@ HELP = (
     "/status — وضعیت ربات\n"
     "/chart BTC/USDT — نمودار تازه بازار\n"
     "/help — راهنما\n\n"
-    "حساب دمو داخلی: /demo | تغییر مارجین: /demo_size 5 | تغییر اهرم: /demo_leverage 5\\n"
+    "حساب دمو داخلی: /demo | تغییر مارجین: /demo_size 5 | تغییر اهرم: /demo_leverage 5\n"
     "سیگنال‌های جدید در صورت کافی بودن مارجین، به‌صورت شبیه‌سازی‌شده وارد حساب دمو می‌شوند. "
     "هیچ سفارش واقعی ارسال نمی‌شود."
 )
@@ -200,20 +200,20 @@ async def handle_command(text: str, chat_id: str, notifier: TelegramNotifier, st
     elif command == "/demo":
         d = store.demo_summary()
         await notifier.send(
-            "🧪 حساب دمو داخلی (بدون سفارش واقعی)\\n"
-            f"موجودی اولیه: {d['initial']:.2f}$\\n"
-            f"سود/ضرر قطعی: {d['realized']:+.4f}$\\n"
-            f"سود/ضرر شناور: {d['floating']:+.4f}$\\n"
-            f"ارزش کل حساب: {d['equity']:.4f}$\\n"
-            f"مارجین درگیر: {d['used_margin']:.2f}$\\n"
-            f"مارجین آزاد: {d['free_margin']:.4f}$\\n"
-            f"پوزیشن‌های دمو باز: {d['open_count']}\\n"
+            "🧪 حساب دمو داخلی (بدون سفارش واقعی)\n"
+            f"موجودی اولیه: {d['initial']:.2f}$\n"
+            f"سود/ضرر قطعی: {d['realized']:+.4f}$\n"
+            f"سود/ضرر شناور: {d['floating']:+.4f}$\n"
+            f"ارزش کل حساب: {d['equity']:.4f}$\n"
+            f"مارجین درگیر: {d['used_margin']:.2f}$\n"
+            f"مارجین آزاد: {d['free_margin']:.4f}$\n"
+            f"پوزیشن‌های دمو باز: {d['open_count']}\n"
             f"هر معامله: {d['margin_per_trade']:.2f}$ مارجین × {d['leverage']:.2f} اهرم = {d['notional']:.2f}$ ارزش معامله",
             chat_id)
     elif command == "/demo_size":
         if not arg:
             d = store.demo_summary()
-            await notifier.send(f"مبلغ مارجین فعلی هر معامله: {d['margin_per_trade']:.2f}$\\nتغییر: /demo_size 5", chat_id)
+            await notifier.send(f"مبلغ مارجین فعلی هر معامله: {d['margin_per_trade']:.2f}$\nتغییر: /demo_size 5", chat_id)
         else:
             try:
                 value = float(arg)
@@ -226,7 +226,7 @@ async def handle_command(text: str, chat_id: str, notifier: TelegramNotifier, st
     elif command == "/demo_leverage":
         if not arg:
             d = store.demo_summary()
-            await notifier.send(f"اهرم فعلی دمو: {d['leverage']:g}\\nتغییر: /demo_leverage 5", chat_id)
+            await notifier.send(f"اهرم فعلی دمو: {d['leverage']:g}\nتغییر: /demo_leverage 5", chat_id)
         else:
             try:
                 value = float(arg)
@@ -247,8 +247,8 @@ async def handle_command(text: str, chat_id: str, notifier: TelegramNotifier, st
             for row in rows[:30]:
                 opened_at = str(row.get("created_at") or "نامشخص").replace("T", " ").replace("+00:00", " UTC")
                 lines.append(
-                    f"#{row['id']} {row['symbol']} {row['side']}\\n"
-                    f"زمان باز شدن: {opened_at}\\n"
+                    f"#{row['id']} {row['symbol']} {row['side']}\n"
+                    f"زمان باز شدن: {opened_at}\n"
                     f"ورود: {row['entry']} | حدضرر: {row['stop_loss']} | حدسود: {row['take_profit']}"
                 )
             await notifier.send("\n".join(lines), chat_id)
@@ -477,9 +477,9 @@ async def run() -> None:
                                 emoji = "🟢" if (pnl_usd or 0) > 0 else ("🔴" if (pnl_usd or 0) < 0 else "🟡")
                                 title = "حد سود فعال شد" if row["exit_label"] == "TP" else "حد ضرر فعال شد"
                                 await notifier.send(
-                                    f"{emoji} {title} | {row['symbol']}\\nشماره: #{row['id']}\\n"
-                                    f"ورود: {row['entry']} | خروج: {row['exit_price']}\\n"
-                                    f"نتیجه دمو: {(pnl_usd or 0):+.4f}$ ({pnl_pct:+.3f}%)\\n"
+                                    f"{emoji} {title} | {row['symbol']}\nشماره: #{row['id']}\n"
+                                    f"ورود: {row['entry']} | خروج: {row['exit_price']}\n"
+                                    f"نتیجه دمو: {(pnl_usd or 0):+.4f}$ ({pnl_pct:+.3f}%)\n"
                                     "کارمزد و فاندینگ فعلاً محاسبه نشده؛ سفارش واقعی ارسال نشده."
                                 )
                             store.set_setting(eval_key, latest_ts)
