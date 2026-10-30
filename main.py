@@ -305,7 +305,16 @@ async def notify_closed_signals(
     """Call once for each newly closed 15m candle, after the signal is already recorded."""
     closed = store.evaluate_candle(symbol, candle_high, candle_low)
     for row in closed:
-        emoji = "🎯" if row["exit_label"] == "TP" else "🛑"
+        pnl_pct = float(row["pnl_pct"])
+        # Demo sizing: $5 margin × 5x leverage = $25 notional.
+        # Gross estimate only; trading fees and funding are not deducted here.
+        pnl_usd = 25.0 * pnl_pct / 100.0
+        if pnl_usd > 1e-10:
+            emoji, outcome = "🟢", "سود"
+        elif pnl_usd < -1e-10:
+            emoji, outcome = "🔴", "ضرر"
+        else:
+            emoji, outcome = "🟡", "سر‌به‌سر"
         title = "حد سود فعال شد" if row["exit_label"] == "TP" else "حد ضرر فعال شد"
         await notifier.send(
             f"{emoji} {title} | {row['symbol']}\n"
@@ -313,8 +322,9 @@ async def notify_closed_signals(
             f"شماره سیگنال: #{row['id']}\n"
             f"قیمت ورود: {row['entry']}\n"
             f"قیمت خروج محاسباتی: {row['exit_price']}\n"
-            f"نتیجه تخمینی: {row['pnl_pct']:+.3f}%\n"
-            "این نتیجه بر پایه قیمت کندل بازار است، نه معامله واقعی در حساب WEEX."
+            f"نتیجه: {outcome} | {pnl_usd:+.4f} دلار ({pnl_pct:+.3f}%)\n"
+            "مبنای محاسبه دمو: ۵ دلار مارجین با اهرم ۵ (ارزش معامله ۲۵ دلار).\n"
+            "مبلغ ناخالص تخمینی است و کارمزد/فاندینگ از آن کم نشده؛ سفارش واقعی ارسال نشده."
         )
     return len(closed)
 
