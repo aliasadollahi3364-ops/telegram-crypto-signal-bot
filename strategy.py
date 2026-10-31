@@ -43,7 +43,7 @@ class StrategyConfig:
     use_break_even: bool = True
     break_even_trigger_r: float = 1.0
     use_trailing_stop: bool = True
-    trailing_atr_mult: float = 1.5  # Kept for config compatibility; OB-based trailing uses the ATR buffer below.
+    trailing_atr_mult: float = 1.5
 
 
 def _prepare(candles: list[list[float]]) -> pd.DataFrame:
@@ -62,6 +62,43 @@ def _atr(df: pd.DataFrame, length: int) -> pd.Series:
         (df["low"] - prev_close).abs(),
     ], axis=1).max(axis=1)
     return tr.rolling(length, min_periods=length).mean()
+
+
+def _apply_ob_trailing_stop(
+    trade: dict[str, Any],
+    newly_confirmed_obs: list[dict[str, Any]],
+    atr: float,
+    close: float,
+    cfg: StrategyConfig,
+) -> bool:
+    """Mirror Pine's OB trailing: move only on a newly confirmed same-side OB."""
+    if not cfg.use_trailing_stop:
+        return False
+    side = trade["side"].upper()
+    direction = 1 if side == "BUY" else -1
+    entry_ob_timestamp = trade["ob_timestamp"]
+    candidates = [
+        ob for ob in newly_confirmed_obs
+        if ob["active"] and ob["direction"] == direction
+        and ob["timestamp"] > entry_ob_timestamp
+    ]
+    if not candidates:
+        return False
+
+    latest_ob = max(candidates, key=lambda ob: ob["timestamp"])
+    distance = float(atr) * cfg.trailing_atr_mult
+    current_sl = float(trade["sl"])
+    if side == "BUY":
+        candidate = float(latest_ob["bottom"]) - distance
+        if candidate > current_sl and candidate < float(close):
+            trade["sl"] = candidate
+            return True
+    else:
+        candidate = float(latest_ob["top"]) + distance
+        if candidate < current_sl and candidate > float(close):
+            trade["sl"] = candidate
+            return True
+    return False
 
 
 def _confirmed_pivots(df: pd.DataFrame, left: int, right: int) -> tuple[pd.Series, pd.Series]:
@@ -146,9 +183,12 @@ def evaluate_latest(
     for i, row in df.iterrows():
         ts = row["timestamp"]
         # Only HTF candles whose close timestamp is at/before this 15m close are considered.
+        newly_confirmed_obs: list[dict[str, Any]] = []
         while event_idx < len(events) and events[event_idx]["timestamp"] <= ts:
-            obs.append({**events[event_idx], "active": True, "used": False, "touched": False,
-                        "touch_bar": None, "has_choch": False, "choch_level": None, "choch_bar": None})
+            new_ob = {**events[event_idx], "active": True, "used": False, "touched": False,
+                      "touch_bar": None, "has_choch": False, "choch_level": None, "choch_bar": None}
+            obs.append(new_ob)
+            newly_confirmed_obs.append(new_ob)
             event_idx += 1
         prior_htf = htf[htf["timestamp"] + pd.Timedelta(hours=4) <= ts]
         if not prior_htf.empty:
@@ -184,31 +224,11 @@ def evaluate_latest(
                 if trade["side"] == "BUY":
                     if cfg.use_break_even and high >= trade["entry"] + trade["initial_risk"] * cfg.break_even_trigger_r:
                         trade["sl"] = max(trade["sl"], trade["entry"])
-                    if cfg.use_trailing_stop:
-                        # Trail only behind a confirmed, active bullish order block.
-                        # Never move the stop down or into the selected OB.
-                        candidates = [ob for ob in obs
-                                      if ob["active"] and ob["direction"] == 1
-                                      and ob["bottom"] < float(row["close"])]
-                        if candidates:
-                            latest_ob = max(candidates, key=lambda x: x["timestamp"])
-                            trail = float(latest_ob["bottom"]) - float(atr) * cfg.sl_buffer_atr
-                            trail = min(trail, trade["tp"] - 1e-12)
-                            trade["sl"] = max(trade["sl"], trail)
+                    _apply_ob_trailing_stop(trade, newly_confirmed_obs, float(atr), float(row["close"]), cfg)
                 else:
                     if cfg.use_break_even and low <= trade["entry"] - trade["initial_risk"] * cfg.break_even_trigger_r:
                         trade["sl"] = min(trade["sl"], trade["entry"])
-                    if cfg.use_trailing_stop:
-                        # Trail only behind a confirmed, active bearish order block.
-                        # Never move the stop up or into the selected OB.
-                        candidates = [ob for ob in obs
-                                      if ob["active"] and ob["direction"] == -1
-                                      and ob["top"] > float(row["close"])]
-                        if candidates:
-                            latest_ob = max(candidates, key=lambda x: x["timestamp"])
-                            trail = float(latest_ob["top"]) + float(atr) * cfg.sl_buffer_atr
-                            trail = max(trail, trade["tp"] + 1e-12)
-                            trade["sl"] = min(trade["sl"], trail)
+                    _apply_ob_trailing_stop(trade, newly_confirmed_obs, float(atr), float(row["close"]), cfg)
         if trade is not None:
             continue
 
@@ -267,12 +287,13 @@ def evaluate_latest(
                          "initial_risk": distance, "trail_distance": distance,
                          "extreme": float(row["high"] if side == "BUY" else row["low"]),
                          "ob_top": float(top), "ob_bottom": float(bottom),
-                         "ob_direction": int(direction)}
+                         "ob_direction": int(direction), "ob_timestamp": ob["timestamp"]}
                 ob["used"] = True
                 if i == len(df) - 1:
                     latest_signal = {
                     "side": side, "entry": entry, "stop_loss": float(sl), "take_profit": float(tp),
                     "timestamp": int(ts.timestamp() * 1000),
+                    "ob_timestamp": int(ob["timestamp"].timestamp() * 1000),
                     "choch_price": float(level) if level is not None else None,
                     "order_blocks": [{"low": bottom, "high": top, "start": 0, "end": len(df)-1,
                                       "label": "Order Block صعودی" if direction == 1 else "Order Block نزولی"}],
