@@ -326,6 +326,7 @@ async def handle_command(text: str, chat_id: str, notifier: TelegramNotifier, st
             "🟢 فرایند ربات فعال است.\n"
             f"شروع ثبت آمار: {store.get_setting('started_at')}\n"
             f"جفت‌ارزهای انتخاب‌شده: {len(store.list_pairs())}\n"
+            f"افزودن خودکار ارزها: {'روشن' if store.get_setting('auto_pairs_enabled', 'true').lower() == 'true' else 'خاموش'} | خودکار: {store.count_auto_pairs()}\n"
             f"اسکن استراتژی: {'آزمایشی روشن' if os.getenv('SCANNER_ENABLED', 'true').lower() == 'true' else 'خاموش در تنظیمات سرویس'}\n"
             f"SMA200: {'روشن' if setting_bool(store, 'sma200', 'USE_SMA200_FILTER', False) else 'خاموش'}\n"
             f"استاپ سر‌به‌سر: {'روشن' if setting_bool(store, 'break_even', 'USE_BREAK_EVEN', True) else 'خاموش'}\n"
@@ -495,6 +496,8 @@ async def run() -> None:
                             limit=int(os.getenv("AUTO_PAIRS_LIMIT", "30")),
                             min_quote_volume=float(os.getenv("AUTO_PAIRS_MIN_QUOTE_VOLUME", "1000000")),
                         )
+                        if not ranked_symbols:
+                            raise RuntimeError("WEEX returned no eligible liquid USDT perpetual markets")
                         sync_result = store.sync_auto_pairs(ranked_symbols)
                         store.set_setting("auto_pairs_force_sync", "false")
                         last_auto_sync = time.monotonic()
@@ -535,9 +538,9 @@ async def run() -> None:
                                     emoji = "🟢" if (pnl_usd or 0) > 0 else ("🔴" if (pnl_usd or 0) < 0 else "🟡")
                                     title = "حد سود فعال شد" if row["exit_label"] == "TP" else "حد ضرر فعال شد"
                                     await notifier.send(
-                                        f"{emoji} {title} | {row['symbol']}\\nشماره: #{row['id']}\\n"
-                                        f"ورود: {row['entry']} | خروج: {row['exit_price']}\\n"
-                                        f"نتیجه دمو: {(pnl_usd or 0):+.4f}$ ({pnl_pct:+.3f}%)\\n"
+                                        f"{emoji} {title} | {row['symbol']}\nشماره: #{row['id']}\n"
+                                        f"ورود: {row['entry']} | خروج: {row['exit_price']}\n"
+                                        f"نتیجه دمو: {(pnl_usd or 0):+.4f}$ ({pnl_pct:+.3f}%)\n"
                                         "کارمزد و فاندینگ فعلاً محاسبه نشده؛ سفارش واقعی ارسال نشده."
                                     )
                                 store.set_setting(eval_key, latest_ts)
