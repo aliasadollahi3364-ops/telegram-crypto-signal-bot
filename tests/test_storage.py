@@ -33,19 +33,25 @@ def test_break_even_stop_updates_for_next_candle_only(tmp_path: Path):
     assert closed[0]["pnl_pct"] == 0.0
 
 
-def test_trailing_stop_ratchets_and_profitable_stop_counts_as_win(tmp_path: Path):
+def test_ob_trailing_stop_ratchets_and_profitable_stop_counts_as_win(tmp_path: Path):
     store = _store(tmp_path)
-    store.record_signal(
+    signal_id = store.record_signal(
         "BTC/USDT", "BUY", 100.0, 90.0, 120.0,
         trailing_enabled=True,
     )
 
-    # Initial risk is 10; high reaches 112, so trailing stop moves to 102.
-    assert store.evaluate_candle("BTC/USDT", candle_high=112.0, candle_low=101.0) == []
+    # The OB trailing engine supplies a candidate stop at 102 after this
+    # candle survives; the updated stop must not be tested retroactively.
+    assert store.evaluate_candle(
+        "BTC/USDT",
+        candle_high=112.0,
+        candle_low=101.0,
+        ob_trailing_candidates={signal_id: 102.0},
+    ) == []
     opened = store.open_signals("BTC/USDT")[0]
     assert opened["stop_loss"] == 102.0
 
-    # A later candle reaches the ratcheted stop.
+    # A later candle reaches the ratcheted stop and closes profitably.
     closed = store.evaluate_candle("BTC/USDT", candle_high=105.0, candle_low=101.5)
     assert len(closed) == 1
     assert closed[0]["exit_label"] == "SL"
