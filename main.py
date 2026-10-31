@@ -17,7 +17,7 @@ from dotenv import load_dotenv
 
 from storage import Store
 from charting import render_signal_chart, render_market_chart
-from strategy import StrategyConfig, evaluate_latest, ob_trailing_candidate
+from strategy import StrategyConfig, evaluate_latest, ob_trailing_candidate, ob_trailing_candidate
 
 load_dotenv()
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"),
@@ -347,6 +347,7 @@ async def send_signal_alert(
     order_blocks: Sequence[dict[str, Any]] = (), fvgs: Sequence[dict[str, Any]] = (),
     choch_price: float | None = None, timeframe: str = "15m",
     break_even_enabled: bool = False, trailing_enabled: bool = False,
+    entry_ob_timestamp: int | None = None,
 ) -> int:
     """Called by the validated strategy adapter when a genuinely new signal appears."""
     path = str(Path(tempfile.gettempdir()) / f"weex_signal_{symbol.replace('/', '_')}_{side.lower()}.png")
@@ -355,6 +356,7 @@ async def send_signal_alert(
     signal_id = store.record_signal(
         symbol, side, entry, stop_loss, take_profit, path,
         break_even_enabled=break_even_enabled, trailing_enabled=trailing_enabled,
+        entry_ob_timestamp=entry_ob_timestamp,
     )
     caption = (
         f"📣 سیگنال جدید WEEX | {symbol}\n"
