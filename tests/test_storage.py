@@ -71,3 +71,19 @@ def test_same_candle_sl_and_tp_is_conservatively_loss(tmp_path: Path):
     assert closed[0]["exit_label"] == "SL"
     assert closed[0]["result"] == "LOSS"
     assert closed[0]["exit_price"] == 95.0
+
+
+def test_same_direction_duplicate_open_signal_is_blocked_but_opposite_is_allowed(tmp_path: Path):
+    store = _store(tmp_path)
+    first_id = store.record_signal("GRASS/USDT", "BUY", 0.5903, 0.56, 0.65)
+
+    assert store.has_open_signal("GRASS/USDT", "BUY") is True
+    assert store.has_open_signal("GRASS/USDT", "SELL") is False
+
+    # A different direction remains eligible under the agreed per-direction rule.
+    store.record_signal("GRASS/USDT", "SELL", 0.5903, 0.62, 0.52)
+    assert len(store.open_signals("GRASS/USDT")) == 2
+
+    # Once the BUY is closed, another BUY is no longer blocked.
+    assert store.close_signal(first_id, 0.56, "LOSS", -5.0) is True
+    assert store.has_open_signal("GRASS/USDT", "BUY") is False
