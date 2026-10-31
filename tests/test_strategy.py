@@ -43,3 +43,46 @@ def test_sma_filter_waits_for_enough_history():
     assert evaluate_latest(
         candles_15m, candles_4h, StrategyConfig(use_sma200_filter=True)
     ) is None
+
+
+
+def test_ob_trailing_moves_only_for_newer_same_direction_ob():
+    from strategy import _apply_ob_trailing_stop
+
+    cfg = StrategyConfig(use_trailing_stop=True, trailing_atr_mult=1.5)
+    trade = {"side": "BUY", "sl": 90.0, "ob_timestamp": 100}
+    new_obs = [{
+        "active": True, "direction": 1, "timestamp": 200,
+        "bottom": 95.0, "top": 98.0,
+    }]
+    assert _apply_ob_trailing_stop(trade, new_obs, atr=2.0, close=100.0, cfg=cfg)
+    assert trade["sl"] == 92.0
+
+    # Older or opposite-side blocks cannot move the stop.
+    trade["sl"] = 92.0
+    old_or_opposite = [
+        {"active": True, "direction": 1, "timestamp": 90, "bottom": 99.0, "top": 100.0},
+        {"active": True, "direction": -1, "timestamp": 300, "bottom": 94.0, "top": 98.0},
+    ]
+    assert not _apply_ob_trailing_stop(trade, old_or_opposite, 1.0, 101.0, cfg)
+    assert trade["sl"] == 92.0
+
+
+def test_ob_trailing_short_only_tightens_and_stays_above_market():
+    from strategy import _apply_ob_trailing_stop
+
+    cfg = StrategyConfig(use_trailing_stop=True, trailing_atr_mult=1.5)
+    trade = {"side": "SELL", "sl": 110.0, "ob_timestamp": 100}
+    new_obs = [{
+        "active": True, "direction": -1, "timestamp": 200,
+        "bottom": 102.0, "top": 105.0,
+    }]
+    assert _apply_ob_trailing_stop(trade, new_obs, atr=2.0, close=100.0, cfg=cfg)
+    assert trade["sl"] == 108.0
+
+    # A candidate below the market is rejected; stop never loosens.
+    trade["sl"] = 108.0
+    too_low = [{"active": True, "direction": -1, "timestamp": 300,
+                "bottom": 90.0, "top": 92.0}]
+    assert not _apply_ob_trailing_stop(trade, too_low, 1.0, 100.0, cfg)
+    assert trade["sl"] == 108.0
