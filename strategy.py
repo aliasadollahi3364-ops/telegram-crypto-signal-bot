@@ -101,6 +101,65 @@ def _apply_ob_trailing_stop(
     return False
 
 
+
+def ob_trailing_candidate(
+    candles_15m: list[list[float]],
+    candles_4h: list[list[float]],
+    side: str,
+    entry_ob_timestamp_ms: int | float | None,
+    current_sl: float | None,
+    cfg: StrategyConfig | None = None,
+) -> float | None:
+    """Return a Pine-style OB trailing candidate only when a same-side OB is
+    confirmed on the latest closed 15m bar, newer than the entry OB.
+    """
+    cfg = cfg or StrategyConfig()
+    if not cfg.use_trailing_stop or entry_ob_timestamp_ms is None or current_sl is None:
+        return None
+    if not candles_15m or not candles_4h:
+        return None
+    df = _prepare(candles_15m)
+    if len(df) < cfg.atr_len:
+        return None
+    atr_value = _atr(df, cfg.atr_len).iloc[-1]
+    if pd.isna(atr_value) or float(atr_value) <= 0:
+        return None
+
+    # Candle timestamps are opens; a 15m candle is confirmed at open + 15m.
+    latest_close_time = df.iloc[-1]["timestamp"] + pd.Timedelta(minutes=15)
+    entry_time = pd.to_datetime(float(entry_ob_timestamp_ms), unit="ms", utc=True)
+    events, htf = _build_ob_events(candles_4h, cfg)
+    direction = 1 if side.upper() == "BUY" else -1
+    newly_confirmed = [
+        ob for ob in events
+        if ob["timestamp"] == latest_close_time
+        and ob["timestamp"] > entry_time
+        and ob["direction"] == direction
+    ]
+    if not newly_confirmed:
+        return None
+
+    # Reject blocks already invalidated by a confirmed 4h close.
+    confirmed_htf = htf[htf["timestamp"] + pd.Timedelta(hours=4) <= latest_close_time]
+    if not confirmed_htf.empty:
+        last_htf_close = float(confirmed_htf.iloc[-1]["close"])
+        newly_confirmed = [
+            ob for ob in newly_confirmed
+            if not ((direction == 1 and last_htf_close < ob["bottom"]) or
+                    (direction == -1 and last_htf_close > ob["top"]))
+        ]
+    if not newly_confirmed:
+        return None
+
+    ob = max(newly_confirmed, key=lambda item: item["timestamp"])
+    distance = float(atr_value) * cfg.trailing_atr_mult
+    close = float(df.iloc[-1]["close"])
+    candidate = (float(ob["bottom"]) - distance if direction == 1
+                 else float(ob["top"]) + distance)
+    if direction == 1:
+        return candidate if candidate > float(current_sl) and candidate < close else None
+    return candidate if candidate < float(current_sl) and candidate > close else None
+
 def _confirmed_pivots(df: pd.DataFrame, left: int, right: int) -> tuple[pd.Series, pd.Series]:
     """Pivot values are returned on the confirmation bar, after right bars exist."""
     highs = pd.Series(np.nan, index=df.index, dtype=float)
