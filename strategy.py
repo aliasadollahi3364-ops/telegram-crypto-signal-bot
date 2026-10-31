@@ -27,10 +27,10 @@ class StrategyConfig:
     require_ob_touch: bool = True
     use_touch_freshness: bool = True
     max_bars_since_touch: int = 14
-    use_choch_filter: bool = True
-    use_choch_strength: bool = True
+    use_choch_filter: bool = False
+    use_choch_strength: bool = False
     min_choch_body_atr: float = 0.85
-    use_retest_filter: bool = True
+    use_retest_filter: bool = False
     retest_atr: float = 0.15
     use_confirm_candle: bool = True
     use_confirm_strength: bool = True
@@ -38,7 +38,7 @@ class StrategyConfig:
     risk_reward: float = 2.0
     sl_buffer_atr: float = 0.15
     use_ob_boundary_sl: bool = True
-    use_sma200_filter: bool = False
+    use_sma200_filter: bool = True
     sma_length: int = 200
     use_break_even: bool = True
     break_even_trigger_r: float = 1.0
