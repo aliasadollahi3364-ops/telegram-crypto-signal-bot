@@ -412,7 +412,7 @@ async def notify_closed_signals(
 
 async def scanner_loop(
     store: Store, notifier: TelegramNotifier, market: Any,
-    scan_interval: int, auto_sync_interval: int,
+    scan_interval: int, auto_sync_interval: int, scanner_enabled: bool,
 ) -> None:
     """Run market discovery and strategy scans independently of Telegram polling."""
     last_scan = 0.0
@@ -545,7 +545,7 @@ async def run() -> None:
     scanner_task = None
     if scanner_enabled and market is not None:
         scanner_task = asyncio.create_task(
-            scanner_loop(store, notifier, market, scan_interval, auto_sync_interval),
+            scanner_loop(store, notifier, market, scan_interval, auto_sync_interval, scanner_enabled),
             name="weex-market-scanner",
         )
     while True:
