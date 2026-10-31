@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import numpy as np
+import pandas as pd
 import sys
 from pathlib import Path
 
@@ -86,3 +87,61 @@ def test_ob_trailing_short_only_tightens_and_stays_above_market():
                 "bottom": 90.0, "top": 92.0}]
     assert not _apply_ob_trailing_stop(trade, too_low, 1.0, 100.0, cfg)
     assert trade["sl"] == 108.0
+
+def test_ob_trailing_uses_latest_closed_15m_bar_open_timestamp(monkeypatch):
+    import strategy as strategy_module
+    from strategy import ob_trailing_candidate
+
+    interval = 15 * 60 * 1000
+    start = 1_750_000_000_000
+    candles_15m = [
+        [start + i * interval, 99.0, 101.0, 99.0, 100.0, 10.0]
+        for i in range(3)
+    ]
+    latest_open = pd.to_datetime(candles_15m[-1][0], unit="ms", utc=True)
+    event = {
+        "timestamp": latest_open, "direction": 1,
+        "top": 99.0, "bottom": 96.0, "left": latest_open,
+    }
+    htf = pd.DataFrame({
+        "timestamp": [latest_open - pd.Timedelta(hours=4)],
+        "close": [100.0],
+    })
+    monkeypatch.setattr(strategy_module, "_build_ob_events", lambda _candles, _cfg: ([event], htf))
+
+    candidate = ob_trailing_candidate(
+        candles_15m, [[start, 99.0, 101.0, 99.0, 100.0, 10.0]],
+        "BUY", start, 90.0,
+        StrategyConfig(atr_len=3, use_trailing_stop=True, trailing_atr_mult=1.5),
+    )
+    assert candidate == 93.0
+
+
+def test_ob_trailing_does_not_delay_event_to_next_15m_close(monkeypatch):
+    import strategy as strategy_module
+    from strategy import ob_trailing_candidate
+
+    interval = 15 * 60 * 1000
+    start = 1_750_000_000_000
+    candles_15m = [
+        [start + i * interval, 99.0, 101.0, 99.0, 100.0, 10.0]
+        for i in range(3)
+    ]
+    latest_open = pd.to_datetime(candles_15m[-1][0], unit="ms", utc=True)
+    event = {
+        "timestamp": latest_open + pd.Timedelta(minutes=15), "direction": 1,
+        "top": 99.0, "bottom": 96.0, "left": latest_open,
+    }
+    htf = pd.DataFrame({
+        "timestamp": [latest_open - pd.Timedelta(hours=4)],
+        "close": [100.0],
+    })
+    monkeypatch.setattr(strategy_module, "_build_ob_events", lambda _candles, _cfg: ([event], htf))
+
+    candidate = ob_trailing_candidate(
+        candles_15m, [[start, 99.0, 101.0, 99.0, 100.0, 10.0]],
+        "BUY", start, 90.0,
+        StrategyConfig(atr_len=3, use_trailing_stop=True, trailing_atr_mult=1.5),
+    )
+    assert candidate is None
+
