@@ -125,22 +125,26 @@ def ob_trailing_candidate(
     if pd.isna(atr_value) or float(atr_value) <= 0:
         return None
 
-    # Candle timestamps are opens; a 15m candle is confirmed at open + 15m.
-    latest_close_time = df.iloc[-1]["timestamp"] + pd.Timedelta(minutes=15)
+    # fetch_ohlcv returns closed candles only, but keeps each candle's OPEN timestamp.
+    # evaluate_latest activates a 4h OB on the 15m bar whose open equals the 4h
+    # close time. Use that same timestamp convention here; adding 15m would
+    # incorrectly delay OB trailing by one bar.
+    latest_bar_time = df.iloc[-1]["timestamp"]
     entry_time = pd.to_datetime(float(entry_ob_timestamp_ms), unit="ms", utc=True)
     events, htf = _build_ob_events(candles_4h, cfg)
     direction = 1 if side.upper() == "BUY" else -1
     newly_confirmed = [
         ob for ob in events
-        if ob["timestamp"] == latest_close_time
+        if ob["timestamp"] == latest_bar_time
         and ob["timestamp"] > entry_time
         and ob["direction"] == direction
     ]
     if not newly_confirmed:
         return None
 
-    # Reject blocks already invalidated by a confirmed 4h close.
-    confirmed_htf = htf[htf["timestamp"] + pd.Timedelta(hours=4) <= latest_close_time]
+    # Reject blocks already invalidated by a confirmed 4h close available
+    # at the open of this already-closed 15m candle.
+    confirmed_htf = htf[htf["timestamp"] + pd.Timedelta(hours=4) <= latest_bar_time]
     if not confirmed_htf.empty:
         last_htf_close = float(confirmed_htf.iloc[-1]["close"])
         newly_confirmed = [
