@@ -103,12 +103,13 @@ class Store:
 
     def add_pair(self, symbol: str) -> bool:
         with self._connect() as c:
-            cur = c.execute(
+            exists = c.execute("SELECT 1 FROM pairs WHERE symbol=?", (symbol,)).fetchone()
+            c.execute(
                 "INSERT INTO pairs(symbol,enabled,added_at,source) VALUES(?,1,?,'manual') "
                 "ON CONFLICT(symbol) DO UPDATE SET enabled=1, source='manual'",
                 (symbol, now_iso()),
             )
-            return cur.rowcount > 0
+            return exists is None
 
     def sync_auto_pairs(self, symbols: list[str]) -> dict[str, int]:
         """Refresh only auto-managed rows; manually selected pairs are never removed."""
