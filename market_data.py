@@ -1,12 +1,15 @@
-"""Public WEEX perpetual-market data access (signals only; no private API credentials)."""
+"""Public WEEX perpetual-market data access with short-lived closed-candle caching.
+
+Only public market data is used. No private API credentials or order placement.
+"""
 from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from typing import Any
 
 import ccxt
-import httpx
 
 log = logging.getLogger("signal-bot.market")
 
@@ -17,10 +20,12 @@ class WeexMarketData:
     def __init__(self) -> None:
         self.exchange = ccxt.weex({
             "enableRateLimit": True,
-            "timeout": 20000,
+            "timeout": 12000,
             "options": {"defaultType": "swap"},
         })
         self._loaded = False
+        self._ohlcv_cache: dict[tuple[str, str, int], tuple[float, list[list[float]]]] = {}
+        self._cache_lock = asyncio.Lock()
 
     async def load_markets(self) -> dict[str, Any]:
         markets = await asyncio.to_thread(self.exchange.load_markets)
@@ -43,16 +48,19 @@ class WeexMarketData:
         """Return the most liquid active USDT linear perpetuals by 24h quote volume."""
         if not self._loaded:
             await self.load_markets()
+        import httpx
+
         url = "https://api-contract.weex.com/capi/v3/market/ticker/24hr"
-        async with httpx.AsyncClient(timeout=25) as client:
+        timeout = httpx.Timeout(12.0, connect=5.0)
+        async with httpx.AsyncClient(timeout=timeout) as client:
             response = await client.get(url)
             response.raise_for_status()
             rows = response.json()
         if not isinstance(rows, list):
             raise RuntimeError("Unexpected WEEX 24h ticker response")
         markets_by_id = {
-            str(market.get("id", "")).upper(): (symbol, market)
-            for symbol, market in self.exchange.markets.items()
+            str(market.get("id", "")).upper(): market
+            for market in self.exchange.markets.values()
             if market.get("swap") and market.get("linear")
             and market.get("quote") == "USDT"
             and market.get("active", True)
@@ -61,10 +69,9 @@ class WeexMarketData:
         for row in rows:
             if not isinstance(row, dict):
                 continue
-            match = markets_by_id.get(str(row.get("symbol", "")).upper())
-            if not match:
+            market = markets_by_id.get(str(row.get("symbol", "")).upper())
+            if not market:
                 continue
-            symbol, market = match
             try:
                 quote_volume = float(row.get("quoteVolume") or 0)
                 last_price = float(row.get("lastPrice") or 0)
@@ -72,7 +79,6 @@ class WeexMarketData:
                 continue
             if quote_volume < min_quote_volume or last_price <= 0:
                 continue
-            # Use the plain BASE/USDT form already understood by resolve_symbol.
             ranked.append((quote_volume, f"{market.get('base')}/USDT"))
         ranked.sort(key=lambda item: item[0], reverse=True)
         unique: list[str] = []
@@ -86,7 +92,7 @@ class WeexMarketData:
         return unique
 
     async def resolve_symbol(self, requested: str) -> str:
-        """Accept BTC/USDT as a convenience and resolve only to a USDT linear swap."""
+        """Accept BASE/USDT and resolve only to a USDT linear perpetual."""
         if not self._loaded:
             await self.load_markets()
         symbol = requested.strip().upper()
@@ -102,13 +108,37 @@ class WeexMarketData:
         if timeframe not in ("15m", "4h"):
             raise ValueError("Supported strategy timeframes are 15m and 4h.")
         symbol = await self.resolve_symbol(requested)
-        candles = await asyncio.to_thread(self.exchange.fetch_ohlcv, symbol, timeframe, None, min(limit, 300))
-        if not candles:
-            raise RuntimeError(f"WEEX returned no candles for {symbol}")
-        # Do not treat the currently-forming candle as confirmed.
-        interval_ms = 15 * 60 * 1000 if timeframe == "15m" else 4 * 60 * 60 * 1000
-        now_ms = self.exchange.milliseconds()
-        return [c for c in candles if int(c[0]) + interval_ms <= now_ms]
+        safe_limit = min(max(1, int(limit)), 300)
+        key = (symbol, timeframe, safe_limit)
+        now = time.monotonic()
+        ttl = 45.0 if timeframe == "15m" else 900.0
+        cached = self._ohlcv_cache.get(key)
+        if cached and now - cached[0] < ttl:
+            return [row.copy() for row in cached[1]]
+
+        # Serialize CCXT requests through this adapter. The exchange instance is
+        # shared by the scanner and chart command, and CCXT instances are not
+        # guaranteed to be safe for concurrent use.
+        async with self._cache_lock:
+            now = time.monotonic()
+            cached = self._ohlcv_cache.get(key)
+            if cached and now - cached[0] < ttl:
+                return [row.copy() for row in cached[1]]
+            candles = await asyncio.to_thread(
+                self.exchange.fetch_ohlcv, symbol, timeframe, None, safe_limit
+            )
+            if not candles:
+                raise RuntimeError(f"WEEX returned no candles for {symbol}")
+            interval_ms = 15 * 60 * 1000 if timeframe == "15m" else 4 * 60 * 60 * 1000
+            now_ms = self.exchange.milliseconds()
+            closed = [c for c in candles if int(c[0]) + interval_ms <= now_ms]
+            self._ohlcv_cache[key] = (time.monotonic(), [row.copy() for row in closed])
+            # Bound memory if symbols are frequently added and removed.
+            if len(self._ohlcv_cache) > 500:
+                oldest = sorted(self._ohlcv_cache, key=lambda item: self._ohlcv_cache[item][0])[:100]
+                for old_key in oldest:
+                    self._ohlcv_cache.pop(old_key, None)
+            return [row.copy() for row in closed]
 
     async def close(self) -> None:
         await asyncio.to_thread(self.exchange.close)

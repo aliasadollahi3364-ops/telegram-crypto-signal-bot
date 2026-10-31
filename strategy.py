@@ -27,10 +27,10 @@ class StrategyConfig:
     require_ob_touch: bool = True
     use_touch_freshness: bool = True
     max_bars_since_touch: int = 14
-    use_choch_filter: bool = True
-    use_choch_strength: bool = True
+    use_choch_filter: bool = False
+    use_choch_strength: bool = False
     min_choch_body_atr: float = 0.85
-    use_retest_filter: bool = True
+    use_retest_filter: bool = False
     retest_atr: float = 0.15
     use_confirm_candle: bool = True
     use_confirm_strength: bool = True
@@ -38,12 +38,12 @@ class StrategyConfig:
     risk_reward: float = 2.0
     sl_buffer_atr: float = 0.15
     use_ob_boundary_sl: bool = True
-    use_sma200_filter: bool = False
+    use_sma200_filter: bool = True
     sma_length: int = 200
     use_break_even: bool = True
     break_even_trigger_r: float = 1.0
     use_trailing_stop: bool = True
-    trailing_atr_mult: float = 1.5  # Kept for config compatibility; OB-based trailing uses the ATR buffer below.
+    trailing_atr_mult: float = 1.5
 
 
 def _prepare(candles: list[list[float]]) -> pd.DataFrame:
@@ -63,6 +63,106 @@ def _atr(df: pd.DataFrame, length: int) -> pd.Series:
     ], axis=1).max(axis=1)
     return tr.rolling(length, min_periods=length).mean()
 
+
+def _apply_ob_trailing_stop(
+    trade: dict[str, Any],
+    newly_confirmed_obs: list[dict[str, Any]],
+    atr: float,
+    close: float,
+    cfg: StrategyConfig,
+) -> bool:
+    """Mirror Pine's OB trailing: move only on a newly confirmed same-side OB."""
+    if not cfg.use_trailing_stop:
+        return False
+    side = trade["side"].upper()
+    direction = 1 if side == "BUY" else -1
+    entry_ob_timestamp = trade["ob_timestamp"]
+    candidates = [
+        ob for ob in newly_confirmed_obs
+        if ob["active"] and ob["direction"] == direction
+        and ob["timestamp"] > entry_ob_timestamp
+    ]
+    if not candidates:
+        return False
+
+    latest_ob = max(candidates, key=lambda ob: ob["timestamp"])
+    distance = float(atr) * cfg.trailing_atr_mult
+    current_sl = float(trade["sl"])
+    if side == "BUY":
+        candidate = float(latest_ob["bottom"]) - distance
+        if candidate > current_sl and candidate < float(close):
+            trade["sl"] = candidate
+            return True
+    else:
+        candidate = float(latest_ob["top"]) + distance
+        if candidate < current_sl and candidate > float(close):
+            trade["sl"] = candidate
+            return True
+    return False
+
+
+
+def ob_trailing_candidate(
+    candles_15m: list[list[float]],
+    candles_4h: list[list[float]],
+    side: str,
+    entry_ob_timestamp_ms: int | float | None,
+    current_sl: float | None,
+    cfg: StrategyConfig | None = None,
+) -> float | None:
+    """Return a Pine-style OB trailing candidate only when a same-side OB is
+    confirmed on the latest closed 15m bar, newer than the entry OB.
+    """
+    cfg = cfg or StrategyConfig()
+    if not cfg.use_trailing_stop or entry_ob_timestamp_ms is None or current_sl is None:
+        return None
+    if not candles_15m or not candles_4h:
+        return None
+    df = _prepare(candles_15m)
+    if len(df) < cfg.atr_len:
+        return None
+    atr_value = _atr(df, cfg.atr_len).iloc[-1]
+    if pd.isna(atr_value) or float(atr_value) <= 0:
+        return None
+
+    # fetch_ohlcv returns closed candles only, but keeps each candle's OPEN timestamp.
+    # evaluate_latest activates a 4h OB on the 15m bar whose open equals the 4h
+    # close time. Use that same timestamp convention here; adding 15m would
+    # incorrectly delay OB trailing by one bar.
+    latest_bar_time = df.iloc[-1]["timestamp"]
+    entry_time = pd.to_datetime(float(entry_ob_timestamp_ms), unit="ms", utc=True)
+    events, htf = _build_ob_events(candles_4h, cfg)
+    direction = 1 if side.upper() == "BUY" else -1
+    newly_confirmed = [
+        ob for ob in events
+        if ob["timestamp"] == latest_bar_time
+        and ob["timestamp"] > entry_time
+        and ob["direction"] == direction
+    ]
+    if not newly_confirmed:
+        return None
+
+    # Reject blocks already invalidated by a confirmed 4h close available
+    # at the open of this already-closed 15m candle.
+    confirmed_htf = htf[htf["timestamp"] + pd.Timedelta(hours=4) <= latest_bar_time]
+    if not confirmed_htf.empty:
+        last_htf_close = float(confirmed_htf.iloc[-1]["close"])
+        newly_confirmed = [
+            ob for ob in newly_confirmed
+            if not ((direction == 1 and last_htf_close < ob["bottom"]) or
+                    (direction == -1 and last_htf_close > ob["top"]))
+        ]
+    if not newly_confirmed:
+        return None
+
+    ob = max(newly_confirmed, key=lambda item: item["timestamp"])
+    distance = float(atr_value) * cfg.trailing_atr_mult
+    close = float(df.iloc[-1]["close"])
+    candidate = (float(ob["bottom"]) - distance if direction == 1
+                 else float(ob["top"]) + distance)
+    if direction == 1:
+        return candidate if candidate > float(current_sl) and candidate < close else None
+    return candidate if candidate < float(current_sl) and candidate > close else None
 
 def _confirmed_pivots(df: pd.DataFrame, left: int, right: int) -> tuple[pd.Series, pd.Series]:
     """Pivot values are returned on the confirmation bar, after right bars exist."""
@@ -146,9 +246,12 @@ def evaluate_latest(
     for i, row in df.iterrows():
         ts = row["timestamp"]
         # Only HTF candles whose close timestamp is at/before this 15m close are considered.
+        newly_confirmed_obs: list[dict[str, Any]] = []
         while event_idx < len(events) and events[event_idx]["timestamp"] <= ts:
-            obs.append({**events[event_idx], "active": True, "used": False, "touched": False,
-                        "touch_bar": None, "has_choch": False, "choch_level": None, "choch_bar": None})
+            new_ob = {**events[event_idx], "active": True, "used": False, "touched": False,
+                      "touch_bar": None, "has_choch": False, "choch_level": None, "choch_bar": None}
+            obs.append(new_ob)
+            newly_confirmed_obs.append(new_ob)
             event_idx += 1
         prior_htf = htf[htf["timestamp"] + pd.Timedelta(hours=4) <= ts]
         if not prior_htf.empty:
@@ -184,31 +287,11 @@ def evaluate_latest(
                 if trade["side"] == "BUY":
                     if cfg.use_break_even and high >= trade["entry"] + trade["initial_risk"] * cfg.break_even_trigger_r:
                         trade["sl"] = max(trade["sl"], trade["entry"])
-                    if cfg.use_trailing_stop:
-                        # Trail only behind a confirmed, active bullish order block.
-                        # Never move the stop down or into the selected OB.
-                        candidates = [ob for ob in obs
-                                      if ob["active"] and ob["direction"] == 1
-                                      and ob["bottom"] < float(row["close"])]
-                        if candidates:
-                            latest_ob = max(candidates, key=lambda x: x["timestamp"])
-                            trail = float(latest_ob["bottom"]) - float(atr) * cfg.sl_buffer_atr
-                            trail = min(trail, trade["tp"] - 1e-12)
-                            trade["sl"] = max(trade["sl"], trail)
+                    _apply_ob_trailing_stop(trade, newly_confirmed_obs, float(atr), float(row["close"]), cfg)
                 else:
                     if cfg.use_break_even and low <= trade["entry"] - trade["initial_risk"] * cfg.break_even_trigger_r:
                         trade["sl"] = min(trade["sl"], trade["entry"])
-                    if cfg.use_trailing_stop:
-                        # Trail only behind a confirmed, active bearish order block.
-                        # Never move the stop up or into the selected OB.
-                        candidates = [ob for ob in obs
-                                      if ob["active"] and ob["direction"] == -1
-                                      and ob["top"] > float(row["close"])]
-                        if candidates:
-                            latest_ob = max(candidates, key=lambda x: x["timestamp"])
-                            trail = float(latest_ob["top"]) + float(atr) * cfg.sl_buffer_atr
-                            trail = max(trail, trade["tp"] + 1e-12)
-                            trade["sl"] = min(trade["sl"], trail)
+                    _apply_ob_trailing_stop(trade, newly_confirmed_obs, float(atr), float(row["close"]), cfg)
         if trade is not None:
             continue
 
@@ -267,12 +350,13 @@ def evaluate_latest(
                          "initial_risk": distance, "trail_distance": distance,
                          "extreme": float(row["high"] if side == "BUY" else row["low"]),
                          "ob_top": float(top), "ob_bottom": float(bottom),
-                         "ob_direction": int(direction)}
+                         "ob_direction": int(direction), "ob_timestamp": ob["timestamp"]}
                 ob["used"] = True
                 if i == len(df) - 1:
                     latest_signal = {
                     "side": side, "entry": entry, "stop_loss": float(sl), "take_profit": float(tp),
                     "timestamp": int(ts.timestamp() * 1000),
+                    "ob_timestamp": int(ob["timestamp"].timestamp() * 1000),
                     "choch_price": float(level) if level is not None else None,
                     "order_blocks": [{"low": bottom, "high": top, "start": 0, "end": len(df)-1,
                                       "label": "Order Block صعودی" if direction == 1 else "Order Block نزولی"}],

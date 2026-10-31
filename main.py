@@ -17,7 +17,7 @@ from dotenv import load_dotenv
 
 from storage import Store
 from charting import render_signal_chart, render_market_chart
-from strategy import StrategyConfig, evaluate_latest
+from strategy import StrategyConfig, evaluate_latest, ob_trailing_candidate
 
 load_dotenv()
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"),
@@ -98,7 +98,7 @@ def setting_bool(store: Store, key: str, env_name: str, default: bool) -> bool:
 
 
 def settings_keyboard(store: Store) -> dict[str, Any]:
-    sma = setting_bool(store, "sma200", "USE_SMA200_FILTER", False)
+    sma = setting_bool(store, "sma200", "USE_SMA200_FILTER", True)
     be = setting_bool(store, "break_even", "USE_BREAK_EVEN", True)
     trail = setting_bool(store, "trailing_stop", "USE_TRAILING_STOP", True)
     return {"inline_keyboard": [
@@ -299,15 +299,18 @@ async def handle_command(text: str, chat_id: str, notifier: TelegramNotifier, st
                 sma_values = [None if pd.isna(v) else float(v) for v in sma_series]
                 cfg = StrategyConfig(
                     use_trend_filter=True,
-                    use_sma200_filter=setting_bool(store, "sma200", "USE_SMA200_FILTER", False),
+                    use_sma200_filter=setting_bool(store, "sma200", "USE_SMA200_FILTER", True),
                     use_break_even=setting_bool(store, "break_even", "USE_BREAK_EVEN", True),
                     use_trailing_stop=setting_bool(store, "trailing_stop", "USE_TRAILING_STOP", True),
                 )
                 signal = evaluate_latest(candles, candles4h, cfg)
                 order_blocks = signal.get("order_blocks", []) if signal else []
                 choch_price = signal.get("choch_price") if signal else None
-                render_market_chart(candles, arg, "15m", path, sma_values=sma_values,
-                                    order_blocks=order_blocks, choch_price=choch_price, signal=signal)
+                await asyncio.to_thread(
+                    render_market_chart, candles, arg, "15m", path,
+                    sma_values=sma_values, order_blocks=order_blocks,
+                    choch_price=choch_price, signal=signal,
+                )
                 last = float(candles[-1][4])
                 caption = (f"📈 نمودار تازه WEEX | {arg}\n"
                            f"تایم‌فریم: ۱۵ دقیقه\nآخرین کندل: {last:g}\n"
@@ -328,7 +331,7 @@ async def handle_command(text: str, chat_id: str, notifier: TelegramNotifier, st
             f"جفت‌ارزهای انتخاب‌شده: {len(store.list_pairs())}\n"
             f"افزودن خودکار ارزها: {'روشن' if store.get_setting('auto_pairs_enabled', 'true').lower() == 'true' else 'خاموش'} | خودکار: {store.count_auto_pairs()}\n"
             f"اسکن استراتژی: {'آزمایشی روشن' if os.getenv('SCANNER_ENABLED', 'true').lower() == 'true' else 'خاموش در تنظیمات سرویس'}\n"
-            f"SMA200: {'روشن' if setting_bool(store, 'sma200', 'USE_SMA200_FILTER', False) else 'خاموش'}\n"
+            f"SMA200: {'روشن' if setting_bool(store, 'sma200', 'USE_SMA200_FILTER', True) else 'خاموش'}\n"
             f"استاپ سر‌به‌سر: {'روشن' if setting_bool(store, 'break_even', 'USE_BREAK_EVEN', True) else 'خاموش'}\n"
             f"استاپ شناور: {'روشن' if setting_bool(store, 'trailing_stop', 'USE_TRAILING_STOP', True) else 'خاموش'}\n"
             f"حساب دمو: موجودی {store.demo_summary()['equity']:.2f}$ | مارجین هر معامله {store.demo_summary()['margin_per_trade']:.2f}$ | اهرم {store.demo_summary()['leverage']:g}x\n"
@@ -347,14 +350,18 @@ async def send_signal_alert(
     order_blocks: Sequence[dict[str, Any]] = (), fvgs: Sequence[dict[str, Any]] = (),
     choch_price: float | None = None, timeframe: str = "15m",
     break_even_enabled: bool = False, trailing_enabled: bool = False,
+    entry_ob_timestamp: int | None = None,
 ) -> int:
     """Called by the validated strategy adapter when a genuinely new signal appears."""
     path = str(Path(tempfile.gettempdir()) / f"weex_signal_{symbol.replace('/', '_')}_{side.lower()}.png")
-    render_signal_chart(candles, symbol, timeframe, side, entry, stop_loss, take_profit,
-                        order_blocks, fvgs, choch_price, path)
+    await asyncio.to_thread(
+        render_signal_chart, candles, symbol, timeframe, side, entry, stop_loss,
+        take_profit, order_blocks, fvgs, choch_price, path,
+    )
     signal_id = store.record_signal(
         symbol, side, entry, stop_loss, take_profit, path,
         break_even_enabled=break_even_enabled, trailing_enabled=trailing_enabled,
+        entry_ob_timestamp=entry_ob_timestamp,
     )
     caption = (
         f"📣 سیگنال جدید WEEX | {symbol}\n"
@@ -403,6 +410,114 @@ async def notify_closed_signals(
     return len(closed)
 
 
+async def scanner_loop(
+    store: Store, notifier: TelegramNotifier, market: Any,
+    scan_interval: int, auto_sync_interval: int, scanner_enabled: bool,
+) -> None:
+    """Run market discovery and strategy scans independently of Telegram polling."""
+    last_scan = 0.0
+    last_auto_sync = 0.0
+    while True:
+        try:
+            if scanner_enabled and market is not None:
+                auto_enabled = store.get_setting("auto_pairs_enabled", "true").lower() == "true"
+                force_auto_sync = store.get_setting("auto_pairs_force_sync", "false").lower() == "true"
+                if auto_enabled and (force_auto_sync or time.monotonic() - last_auto_sync >= auto_sync_interval):
+                    try:
+                        ranked_symbols = await market.top_liquid_perpetual_symbols(
+                            limit=int(os.getenv("AUTO_PAIRS_LIMIT", "30")),
+                            min_quote_volume=float(os.getenv("AUTO_PAIRS_MIN_QUOTE_VOLUME", "1000000")),
+                        )
+                        if not ranked_symbols:
+                            raise RuntimeError("WEEX returned no eligible liquid USDT perpetual markets")
+                        sync_result = store.sync_auto_pairs(ranked_symbols)
+                        store.set_setting("auto_pairs_force_sync", "false")
+                        last_auto_sync = time.monotonic()
+                        if sync_result["added"] or sync_result["removed"] or force_auto_sync:
+                            await notifier.send(
+                                "🤖 فهرست خودکار WEEX به‌روزرسانی شد.\n"
+                                f"ارزهای جدید: {sync_result['added']} | حذف از فهرست خودکار: {sync_result['removed']}\n"
+                                f"ارزهای خودکار فعال: {sync_result['auto_count']} | کل ارزهای اسکن: {sync_result['total_count']}\n"
+                                "معیار انتخاب: حجم معاملات ۲۴ ساعته قراردادهای دائمی USDT.",
+                            )
+                    except Exception:
+                        log.exception("Automatic WEEX market discovery failed")
+                        last_auto_sync = time.monotonic()
+                if time.monotonic() - last_scan >= scan_interval:
+                    last_scan = time.monotonic()
+                    config = StrategyConfig(
+                        use_trend_filter=True,
+                        use_sma200_filter=setting_bool(store, "sma200", "USE_SMA200_FILTER", True),
+                        use_break_even=setting_bool(store, "break_even", "USE_BREAK_EVEN", True),
+                        use_trailing_stop=setting_bool(store, "trailing_stop", "USE_TRAILING_STOP", True),
+                    )
+                    for requested in store.list_pairs():
+                        try:
+                            candles15 = await market.fetch_ohlcv(requested, timeframe="15m", limit=300)
+                            candles4h = await market.fetch_ohlcv(requested, timeframe="4h", limit=300)
+                            if len(candles15) < 20 or len(candles4h) < 20:
+                                continue
+                            latest_ts = str(int(candles15[-1][0]))
+                            eval_key = "last_eval_candle_" + requested.replace("/", "_").replace(":", "_")
+                            if store.get_setting(eval_key) != latest_ts:
+                                ob_candidates: dict[int, float] = {}
+                                if config.use_trailing_stop:
+                                    for opened in store.open_signals(requested):
+                                        candidate = ob_trailing_candidate(
+                                            candles15, candles4h, opened["side"],
+                                            opened.get("entry_ob_timestamp"),
+                                            opened.get("stop_loss"), config,
+                                        )
+                                        if candidate is not None:
+                                            ob_candidates[int(opened["id"])] = candidate
+                                closed_rows = store.evaluate_candle(
+                                    requested, float(candles15[-1][2]),
+                                    float(candles15[-1][3]), float(candles15[-1][4]),
+                                    ob_trailing_candidates=ob_candidates,
+                                )
+                                for row in closed_rows:
+                                    pnl_pct = float(row["pnl_pct"])
+                                    pnl_usd = row.get("demo_pnl_usd")
+                                    emoji = "🟢" if (pnl_usd or 0) > 0 else ("🔴" if (pnl_usd or 0) < 0 else "🟡")
+                                    title = "حد سود فعال شد" if row["exit_label"] == "TP" else "حد ضرر فعال شد"
+                                    await notifier.send(
+                                        f"{emoji} {title} | {row['symbol']}\nشماره: #{row['id']}\n"
+                                        f"ورود: {row['entry']} | خروج: {row['exit_price']}\n"
+                                        f"نتیجه دمو: {(pnl_usd or 0):+.4f}$ ({pnl_pct:+.3f}%)\n"
+                                        "کارمزد و فاندینگ فعلاً محاسبه نشده؛ سفارش واقعی ارسال نشده."
+                                    )
+                                store.set_setting(eval_key, latest_ts)
+                            signal = evaluate_latest(candles15, candles4h, config)
+                            if signal:
+                                signal_key = "last_signal_candle_" + requested.replace("/", "_").replace(":", "_")
+                                if store.get_setting(signal_key) != str(signal["timestamp"]):
+                                    if store.has_open_signal(requested, signal["side"]):
+                                        log.info(
+                                            "Skipping duplicate %s signal for %s: same-direction position is already open.",
+                                            signal["side"], requested,
+                                        )
+                                        store.set_setting(signal_key, str(signal["timestamp"]))
+                                    else:
+                                        await send_signal_alert(
+                                            notifier, store, symbol=requested, side=signal["side"],
+                                            entry=signal["entry"], candles=candles15,
+                                            stop_loss=signal["stop_loss"], take_profit=signal["take_profit"],
+                                            order_blocks=signal["order_blocks"], fvgs=signal["fvgs"],
+                                            choch_price=signal["choch_price"], timeframe="15m",
+                                            break_even_enabled=config.use_break_even,
+                                            trailing_enabled=config.use_trailing_stop,
+                                            entry_ob_timestamp=signal.get("ob_timestamp"))
+                                        store.set_setting(signal_key, str(signal["timestamp"]))
+                        except Exception:
+                            log.exception("Scanner error for %s", requested)
+            await asyncio.sleep(1)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("Background scanner cycle failed; retrying shortly.")
+            await asyncio.sleep(5)
+
+
 async def run() -> None:
     token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
     chat_id = os.getenv("TELEGRAM_CHAT_ID", "").strip()
@@ -413,8 +528,10 @@ async def run() -> None:
         raise RuntimeError("This project is configured for the requested 15m timeframe.")
 
     store = Store()
-    # Keep the TradingView SMA200 entry filter disabled; the chart line remains display-only.
-    store.set_setting("user_sma200", "false")
+    # Apply the agreed V2 defaults once; users can still change SMA200 from Telegram settings.
+    if store.get_setting("strategy_v2_defaults_applied") != "true":
+        store.set_setting("user_sma200", "true")
+        store.set_setting("strategy_v2_defaults_applied", "true")
     notifier = TelegramNotifier(token, chat_id)
     log.info("Bot online; signals-only; timeframe=%s", timeframe)
     scanner_enabled = os.getenv("SCANNER_ENABLED", "true").strip().lower() == "true"
@@ -431,9 +548,13 @@ async def run() -> None:
            if scanner_enabled else "اسکنر خاموش است تا منطق با TradingView تطبیق داده شود.\nمعامله واقعی غیرفعال است.")
     )
     offset = int(store.get_setting("telegram_offset", "0"))
-    last_scan = 0.0
-    last_auto_sync = 0.0
     auto_sync_interval = max(3600, int(os.getenv("AUTO_PAIRS_REFRESH_SECONDS", "21600")))
+    scanner_task = None
+    if scanner_enabled and market is not None:
+        scanner_task = asyncio.create_task(
+            scanner_loop(store, notifier, market, scan_interval, auto_sync_interval, scanner_enabled),
+            name="weex-market-scanner",
+        )
     while True:
         try:
             updates = await notifier.updates(offset)
@@ -464,7 +585,7 @@ async def run() -> None:
                             elif data.startswith("settings:toggle:"):
                                 key = data.rsplit(":", 1)[1]
                                 config_map = {
-                                    "sma200": ("USE_SMA200_FILTER", False, "فیلتر SMA200"),
+                                    "sma200": ("USE_SMA200_FILTER", True, "فیلتر SMA200"),
                                     "break_even": ("USE_BREAK_EVEN", True, "استاپ سر‌به‌سر"),
                                     "trailing_stop": ("USE_TRAILING_STOP", True, "استاپ شناور"),
                                 }
@@ -487,78 +608,6 @@ async def run() -> None:
                 source_chat = str((message.get("chat") or {}).get("id", ""))
                 if incoming.startswith("/"):
                     await handle_command(incoming, source_chat, notifier, store, chat_id)
-            if scanner_enabled and market is not None:
-                auto_enabled = store.get_setting("auto_pairs_enabled", "true").lower() == "true"
-                force_auto_sync = store.get_setting("auto_pairs_force_sync", "false").lower() == "true"
-                if auto_enabled and (force_auto_sync or time.monotonic() - last_auto_sync >= auto_sync_interval):
-                    try:
-                        ranked_symbols = await market.top_liquid_perpetual_symbols(
-                            limit=int(os.getenv("AUTO_PAIRS_LIMIT", "30")),
-                            min_quote_volume=float(os.getenv("AUTO_PAIRS_MIN_QUOTE_VOLUME", "1000000")),
-                        )
-                        if not ranked_symbols:
-                            raise RuntimeError("WEEX returned no eligible liquid USDT perpetual markets")
-                        sync_result = store.sync_auto_pairs(ranked_symbols)
-                        store.set_setting("auto_pairs_force_sync", "false")
-                        last_auto_sync = time.monotonic()
-                        if sync_result["added"] or sync_result["removed"] or force_auto_sync:
-                            await notifier.send(
-                                "🤖 فهرست خودکار WEEX به‌روزرسانی شد.\n"
-                                f"ارزهای جدید: {sync_result['added']} | حذف از فهرست خودکار: {sync_result['removed']}\n"
-                                f"ارزهای خودکار فعال: {sync_result['auto_count']} | کل ارزهای اسکن: {sync_result['total_count']}\n"
-                                "معیار انتخاب: حجم معاملات ۲۴ ساعته قراردادهای دائمی USDT.",
-                            )
-                    except Exception:
-                        log.exception("Automatic WEEX market discovery failed")
-                        last_auto_sync = time.monotonic()
-                if time.monotonic() - last_scan >= scan_interval:
-                    last_scan = time.monotonic()
-                    config = StrategyConfig(
-                        use_trend_filter=True,
-                        use_sma200_filter=setting_bool(store, "sma200", "USE_SMA200_FILTER", False),
-                        use_break_even=setting_bool(store, "break_even", "USE_BREAK_EVEN", True),
-                        use_trailing_stop=setting_bool(store, "trailing_stop", "USE_TRAILING_STOP", True),
-                    )
-                    for requested in store.list_pairs():
-                        try:
-                            candles15 = await market.fetch_ohlcv(requested, timeframe="15m", limit=300)
-                            candles4h = await market.fetch_ohlcv(requested, timeframe="4h", limit=300)
-                            if len(candles15) < 20 or len(candles4h) < 20:
-                                continue
-                            latest_ts = str(int(candles15[-1][0]))
-                            eval_key = "last_eval_candle_" + requested.replace("/", "_").replace(":", "_")
-                            if store.get_setting(eval_key) != latest_ts:
-                                closed_rows = store.evaluate_candle(
-                                    requested, float(candles15[-1][2]),
-                                    float(candles15[-1][3]), float(candles15[-1][4])
-                                )
-                                for row in closed_rows:
-                                    pnl_pct = float(row["pnl_pct"])
-                                    pnl_usd = row.get("demo_pnl_usd")
-                                    emoji = "🟢" if (pnl_usd or 0) > 0 else ("🔴" if (pnl_usd or 0) < 0 else "🟡")
-                                    title = "حد سود فعال شد" if row["exit_label"] == "TP" else "حد ضرر فعال شد"
-                                    await notifier.send(
-                                        f"{emoji} {title} | {row['symbol']}\nشماره: #{row['id']}\n"
-                                        f"ورود: {row['entry']} | خروج: {row['exit_price']}\n"
-                                        f"نتیجه دمو: {(pnl_usd or 0):+.4f}$ ({pnl_pct:+.3f}%)\n"
-                                        "کارمزد و فاندینگ فعلاً محاسبه نشده؛ سفارش واقعی ارسال نشده."
-                                    )
-                                store.set_setting(eval_key, latest_ts)
-                            signal = evaluate_latest(candles15, candles4h, config)
-                            if signal:
-                                signal_key = "last_signal_candle_" + requested.replace("/", "_").replace(":", "_")
-                                if store.get_setting(signal_key) != str(signal["timestamp"]):
-                                    await send_signal_alert(
-                                        notifier, store, symbol=requested, side=signal["side"],
-                                        entry=signal["entry"], candles=candles15,
-                                        stop_loss=signal["stop_loss"], take_profit=signal["take_profit"],
-                                        order_blocks=signal["order_blocks"], fvgs=signal["fvgs"],
-                                        choch_price=signal["choch_price"], timeframe="15m",
-                                        break_even_enabled=config.use_break_even,
-                                        trailing_enabled=config.use_trailing_stop)
-                                    store.set_setting(signal_key, str(signal["timestamp"]))
-                        except Exception:
-                            log.exception("Scanner error for %s", requested)
         except asyncio.CancelledError:
             raise
         except Exception:

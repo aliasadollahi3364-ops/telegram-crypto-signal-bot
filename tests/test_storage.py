@@ -33,19 +33,25 @@ def test_break_even_stop_updates_for_next_candle_only(tmp_path: Path):
     assert closed[0]["pnl_pct"] == 0.0
 
 
-def test_trailing_stop_ratchets_and_profitable_stop_counts_as_win(tmp_path: Path):
+def test_ob_trailing_stop_ratchets_and_profitable_stop_counts_as_win(tmp_path: Path):
     store = _store(tmp_path)
-    store.record_signal(
+    signal_id = store.record_signal(
         "BTC/USDT", "BUY", 100.0, 90.0, 120.0,
         trailing_enabled=True,
     )
 
-    # Initial risk is 10; high reaches 112, so trailing stop moves to 102.
-    assert store.evaluate_candle("BTC/USDT", candle_high=112.0, candle_low=101.0) == []
+    # The OB trailing engine supplies a candidate stop at 102 after this
+    # candle survives; the updated stop must not be tested retroactively.
+    assert store.evaluate_candle(
+        "BTC/USDT",
+        candle_high=112.0,
+        candle_low=101.0,
+        ob_trailing_candidates={signal_id: 102.0},
+    ) == []
     opened = store.open_signals("BTC/USDT")[0]
     assert opened["stop_loss"] == 102.0
 
-    # A later candle reaches the ratcheted stop.
+    # A later candle reaches the ratcheted stop and closes profitably.
     closed = store.evaluate_candle("BTC/USDT", candle_high=105.0, candle_low=101.5)
     assert len(closed) == 1
     assert closed[0]["exit_label"] == "SL"
@@ -65,3 +71,19 @@ def test_same_candle_sl_and_tp_is_conservatively_loss(tmp_path: Path):
     assert closed[0]["exit_label"] == "SL"
     assert closed[0]["result"] == "LOSS"
     assert closed[0]["exit_price"] == 95.0
+
+
+def test_same_direction_duplicate_open_signal_is_blocked_but_opposite_is_allowed(tmp_path: Path):
+    store = _store(tmp_path)
+    first_id = store.record_signal("GRASS/USDT", "BUY", 0.5903, 0.56, 0.65)
+
+    assert store.has_open_signal("GRASS/USDT", "BUY") is True
+    assert store.has_open_signal("GRASS/USDT", "SELL") is False
+
+    # A different direction remains eligible under the agreed per-direction rule.
+    store.record_signal("GRASS/USDT", "SELL", 0.5903, 0.62, 0.52)
+    assert len(store.open_signals("GRASS/USDT")) == 2
+
+    # Once the BUY is closed, another BUY is no longer blocked.
+    assert store.close_signal(first_id, 0.56, "LOSS", -5.0) is True
+    assert store.has_open_signal("GRASS/USDT", "BUY") is False
