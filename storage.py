@@ -53,7 +53,7 @@ class Store:
                 initial_stop_loss REAL, initial_risk REAL, extreme REAL,
                 break_even_enabled INTEGER NOT NULL DEFAULT 0,
                 trailing_enabled INTEGER NOT NULL DEFAULT 0,
-                trail_distance REAL
+                trail_distance REAL, entry_ob_timestamp INTEGER
             )""")
             # Migrate databases created by older versions without discarding user data.
             columns = {row["name"] for row in c.execute("PRAGMA table_info(signals)")}
@@ -222,6 +222,7 @@ class Store:
     def evaluate_candle(
         self, symbol: str, candle_high: float, candle_low: float,
         candle_close: float | None = None,
+        ob_trailing_candidates: dict[int, float] | None = None,
     ) -> list[dict[str, Any]]:
         """Evaluate a newly closed candle for paper positions.
 
@@ -298,22 +299,13 @@ class Store:
                 if reached and new_sl is not None:
                     new_sl = max(new_sl, entry) if side == "BUY" else min(new_sl, entry)
 
-            if risk is not None and risk > 0 and row["trailing_enabled"]:
-                distance = float(row["trail_distance"] or risk)
-                if side == "BUY":
-                    new_extreme = max(float(new_extreme), candle_high)
-                    candidate = float(new_extreme) - distance
-                    if tp is not None:
-                        candidate = min(candidate, float(tp) * (1.0 - 1e-12))
-                    if new_sl is not None:
-                        new_sl = max(new_sl, candidate)
-                else:
-                    new_extreme = min(float(new_extreme), candle_low)
-                    candidate = float(new_extreme) + distance
-                    if tp is not None:
-                        candidate = max(candidate, float(tp) * (1.0 + 1e-12))
-                    if new_sl is not None:
-                        new_sl = min(new_sl, candidate)
+            candidate = (ob_trailing_candidates or {}).get(int(row["id"]))
+            if row["trailing_enabled"] and candidate is not None and new_sl is not None:
+                candidate = float(candidate)
+                if side == "BUY" and candidate > new_sl and (tp is None or candidate < float(tp)):
+                    new_sl = candidate
+                elif side == "SELL" and candidate < new_sl and (tp is None or candidate > float(tp)):
+                    new_sl = candidate
 
             if new_sl != current_sl or new_extreme != row["extreme"]:
                 with self._connect() as c:
