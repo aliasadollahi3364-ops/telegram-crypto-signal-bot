@@ -410,92 +410,15 @@ async def notify_closed_signals(
     return len(closed)
 
 
-async def run() -> None:
-    token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
-    chat_id = os.getenv("TELEGRAM_CHAT_ID", "").strip()
-    timeframe = os.getenv("TIMEFRAME", "15m").strip()
-    if not token or not chat_id:
-        raise RuntimeError("Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in Render environment variables.")
-    if timeframe != "15m":
-        raise RuntimeError("This project is configured for the requested 15m timeframe.")
-
-    store = Store()
-    # Apply the agreed V2 defaults once; users can still change SMA200 from Telegram settings.
-    if store.get_setting("strategy_v2_defaults_applied") != "true":
-        store.set_setting("user_sma200", "true")
-        store.set_setting("strategy_v2_defaults_applied", "true")
-    notifier = TelegramNotifier(token, chat_id)
-    log.info("Bot online; signals-only; timeframe=%s", timeframe)
-    scanner_enabled = os.getenv("SCANNER_ENABLED", "true").strip().lower() == "true"
-    scan_interval = max(30, int(os.getenv("SCAN_INTERVAL_SECONDS", "60")))
-    market = None
-    if scanner_enabled:
-        from market_data import WeexMarketData
-        market = WeexMarketData()
-    await notifier.send(
-        "ربات تلگرام WEEX روشن شد.\n"
-        "پنل فارسی و ذخیره آمار فعال است.\n"
-        "شروع ثبت آمار: " + store.get_setting("started_at") + "\n"
-        + ("⚠️ اسکنر آزمایشی روشن است؛ تطبیق با TradingView هنوز باید انجام شود.\nمعامله واقعی غیرفعال است."
-           if scanner_enabled else "اسکنر خاموش است تا منطق با TradingView تطبیق داده شود.\nمعامله واقعی غیرفعال است.")
-    )
-    offset = int(store.get_setting("telegram_offset", "0"))
+async def scanner_loop(
+    store: Store, notifier: TelegramNotifier, market: Any,
+    scan_interval: int, auto_sync_interval: int,
+) -> None:
+    """Run market discovery and strategy scans independently of Telegram polling."""
     last_scan = 0.0
     last_auto_sync = 0.0
-    auto_sync_interval = max(3600, int(os.getenv("AUTO_PAIRS_REFRESH_SECONDS", "21600")))
     while True:
         try:
-            updates = await notifier.updates(offset)
-            for update in updates:
-                offset = max(offset, int(update["update_id"]) + 1)
-                store.set_setting("telegram_offset", str(offset))
-                callback = update.get("callback_query")
-                if callback:
-                    source_chat = str(((callback.get("message") or {}).get("chat") or {}).get("id", ""))
-                    if source_chat == str(chat_id):
-                        data = str(callback.get("data", ""))
-                        try:
-                            if data == "settings:menu":
-                                await show_settings(source_chat, notifier, store)
-                                await notifier.answer_callback(str(callback["id"]))
-                            elif data == "settings:pairs":
-                                pairs = store.list_pairs()
-                                await notifier.send(
-                                    "📌 جفت‌ارزهای انتخاب‌شده:\n" + ("\n".join(pairs) if pairs else "فهرست خالی است.")
-                                    + "\n\nبرای افزودن/حذف فقط نماد ارز را وارد کن؛ مثال: /add BTC یا /remove BTC.",
-                                    source_chat,
-                                    {"inline_keyboard": [[{"text": "⬅️ بازگشت به تنظیمات", "callback_data": "settings:menu"}]]},
-                                )
-                                await notifier.answer_callback(str(callback["id"]))
-                            elif data == "settings:chart":
-                                await notifier.answer_callback(str(callback["id"]), "در حال ساخت نمودار...")
-                                await handle_command("/chart BTC/USDT", source_chat, notifier, store, chat_id)
-                            elif data.startswith("settings:toggle:"):
-                                key = data.rsplit(":", 1)[1]
-                                config_map = {
-                                    "sma200": ("USE_SMA200_FILTER", True, "فیلتر SMA200"),
-                                    "break_even": ("USE_BREAK_EVEN", True, "استاپ سر‌به‌سر"),
-                                    "trailing_stop": ("USE_TRAILING_STOP", True, "استاپ شناور"),
-                                }
-                                if key not in config_map:
-                                    await notifier.answer_callback(str(callback["id"]), "گزینه نامعتبر است.")
-                                else:
-                                    env_name, default, label = config_map[key]
-                                    current = setting_bool(store, key, env_name, default)
-                                    store.set_setting("user_" + key, str(not current).lower())
-                                    await notifier.answer_callback(str(callback["id"]), f"{label}: {'روشن' if not current else 'خاموش'}")
-                                    await show_settings(source_chat, notifier, store)
-                            else:
-                                await notifier.answer_callback(str(callback["id"]))
-                        except Exception:
-                            log.exception("Settings callback failed")
-                            await notifier.answer_callback(str(callback.get("id", "")), "خطا؛ دوباره تلاش کن.")
-                    continue
-                message = update.get("message") or {}
-                incoming = message.get("text", "")
-                source_chat = str((message.get("chat") or {}).get("id", ""))
-                if incoming.startswith("/"):
-                    await handle_command(incoming, source_chat, notifier, store, chat_id)
             if scanner_enabled and market is not None:
                 auto_enabled = store.get_setting("auto_pairs_enabled", "true").lower() == "true"
                 force_auto_sync = store.get_setting("auto_pairs_force_sync", "false").lower() == "true"
@@ -580,6 +503,104 @@ async def run() -> None:
                                     store.set_setting(signal_key, str(signal["timestamp"]))
                         except Exception:
                             log.exception("Scanner error for %s", requested)
+            await asyncio.sleep(1)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("Background scanner cycle failed; retrying shortly.")
+            await asyncio.sleep(5)
+
+
+async def run() -> None:
+    token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+    chat_id = os.getenv("TELEGRAM_CHAT_ID", "").strip()
+    timeframe = os.getenv("TIMEFRAME", "15m").strip()
+    if not token or not chat_id:
+        raise RuntimeError("Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in Render environment variables.")
+    if timeframe != "15m":
+        raise RuntimeError("This project is configured for the requested 15m timeframe.")
+
+    store = Store()
+    # Apply the agreed V2 defaults once; users can still change SMA200 from Telegram settings.
+    if store.get_setting("strategy_v2_defaults_applied") != "true":
+        store.set_setting("user_sma200", "true")
+        store.set_setting("strategy_v2_defaults_applied", "true")
+    notifier = TelegramNotifier(token, chat_id)
+    log.info("Bot online; signals-only; timeframe=%s", timeframe)
+    scanner_enabled = os.getenv("SCANNER_ENABLED", "true").strip().lower() == "true"
+    scan_interval = max(30, int(os.getenv("SCAN_INTERVAL_SECONDS", "60")))
+    market = None
+    if scanner_enabled:
+        from market_data import WeexMarketData
+        market = WeexMarketData()
+    await notifier.send(
+        "ربات تلگرام WEEX روشن شد.\n"
+        "پنل فارسی و ذخیره آمار فعال است.\n"
+        "شروع ثبت آمار: " + store.get_setting("started_at") + "\n"
+        + ("⚠️ اسکنر آزمایشی روشن است؛ تطبیق با TradingView هنوز باید انجام شود.\nمعامله واقعی غیرفعال است."
+           if scanner_enabled else "اسکنر خاموش است تا منطق با TradingView تطبیق داده شود.\nمعامله واقعی غیرفعال است.")
+    )
+    offset = int(store.get_setting("telegram_offset", "0"))
+    auto_sync_interval = max(3600, int(os.getenv("AUTO_PAIRS_REFRESH_SECONDS", "21600")))
+    scanner_task = None
+    if scanner_enabled and market is not None:
+        scanner_task = asyncio.create_task(
+            scanner_loop(store, notifier, market, scan_interval, auto_sync_interval),
+            name="weex-market-scanner",
+        )
+    while True:
+        try:
+            updates = await notifier.updates(offset)
+            for update in updates:
+                offset = max(offset, int(update["update_id"]) + 1)
+                store.set_setting("telegram_offset", str(offset))
+                callback = update.get("callback_query")
+                if callback:
+                    source_chat = str(((callback.get("message") or {}).get("chat") or {}).get("id", ""))
+                    if source_chat == str(chat_id):
+                        data = str(callback.get("data", ""))
+                        try:
+                            if data == "settings:menu":
+                                await show_settings(source_chat, notifier, store)
+                                await notifier.answer_callback(str(callback["id"]))
+                            elif data == "settings:pairs":
+                                pairs = store.list_pairs()
+                                await notifier.send(
+                                    "📌 جفت‌ارزهای انتخاب‌شده:\n" + ("\n".join(pairs) if pairs else "فهرست خالی است.")
+                                    + "\n\nبرای افزودن/حذف فقط نماد ارز را وارد کن؛ مثال: /add BTC یا /remove BTC.",
+                                    source_chat,
+                                    {"inline_keyboard": [[{"text": "⬅️ بازگشت به تنظیمات", "callback_data": "settings:menu"}]]},
+                                )
+                                await notifier.answer_callback(str(callback["id"]))
+                            elif data == "settings:chart":
+                                await notifier.answer_callback(str(callback["id"]), "در حال ساخت نمودار...")
+                                await handle_command("/chart BTC/USDT", source_chat, notifier, store, chat_id)
+                            elif data.startswith("settings:toggle:"):
+                                key = data.rsplit(":", 1)[1]
+                                config_map = {
+                                    "sma200": ("USE_SMA200_FILTER", True, "فیلتر SMA200"),
+                                    "break_even": ("USE_BREAK_EVEN", True, "استاپ سر‌به‌سر"),
+                                    "trailing_stop": ("USE_TRAILING_STOP", True, "استاپ شناور"),
+                                }
+                                if key not in config_map:
+                                    await notifier.answer_callback(str(callback["id"]), "گزینه نامعتبر است.")
+                                else:
+                                    env_name, default, label = config_map[key]
+                                    current = setting_bool(store, key, env_name, default)
+                                    store.set_setting("user_" + key, str(not current).lower())
+                                    await notifier.answer_callback(str(callback["id"]), f"{label}: {'روشن' if not current else 'خاموش'}")
+                                    await show_settings(source_chat, notifier, store)
+                            else:
+                                await notifier.answer_callback(str(callback["id"]))
+                        except Exception:
+                            log.exception("Settings callback failed")
+                            await notifier.answer_callback(str(callback.get("id", "")), "خطا؛ دوباره تلاش کن.")
+                    continue
+                message = update.get("message") or {}
+                incoming = message.get("text", "")
+                source_chat = str((message.get("chat") or {}).get("id", ""))
+                if incoming.startswith("/"):
+                    await handle_command(incoming, source_chat, notifier, store, chat_id)
         except asyncio.CancelledError:
             raise
         except Exception:
