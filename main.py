@@ -570,7 +570,8 @@ async def run() -> None:
                                         order_blocks=signal["order_blocks"], fvgs=signal["fvgs"],
                                         choch_price=signal["choch_price"], timeframe="15m",
                                         break_even_enabled=config.use_break_even,
-                                        trailing_enabled=config.use_trailing_stop,\n                                        entry_ob_timestamp=signal.get("ob_timestamp"))
+                                        trailing_enabled=config.use_trailing_stop,
+                                        entry_ob_timestamp=signal.get("ob_timestamp"))
                                     store.set_setting(signal_key, str(signal["timestamp"]))
                         except Exception:
                             log.exception("Scanner error for %s", requested)
