@@ -491,16 +491,23 @@ async def scanner_loop(
                             if signal:
                                 signal_key = "last_signal_candle_" + requested.replace("/", "_").replace(":", "_")
                                 if store.get_setting(signal_key) != str(signal["timestamp"]):
-                                    await send_signal_alert(
-                                        notifier, store, symbol=requested, side=signal["side"],
-                                        entry=signal["entry"], candles=candles15,
-                                        stop_loss=signal["stop_loss"], take_profit=signal["take_profit"],
-                                        order_blocks=signal["order_blocks"], fvgs=signal["fvgs"],
-                                        choch_price=signal["choch_price"], timeframe="15m",
-                                        break_even_enabled=config.use_break_even,
-                                        trailing_enabled=config.use_trailing_stop,
-                                        entry_ob_timestamp=signal.get("ob_timestamp"))
-                                    store.set_setting(signal_key, str(signal["timestamp"]))
+                                    if store.has_open_signal(requested, signal["side"]):
+                                        log.info(
+                                            "Skipping duplicate %s signal for %s: same-direction position is already open.",
+                                            signal["side"], requested,
+                                        )
+                                        store.set_setting(signal_key, str(signal["timestamp"]))
+                                    else:
+                                        await send_signal_alert(
+                                            notifier, store, symbol=requested, side=signal["side"],
+                                            entry=signal["entry"], candles=candles15,
+                                            stop_loss=signal["stop_loss"], take_profit=signal["take_profit"],
+                                            order_blocks=signal["order_blocks"], fvgs=signal["fvgs"],
+                                            choch_price=signal["choch_price"], timeframe="15m",
+                                            break_even_enabled=config.use_break_even,
+                                            trailing_enabled=config.use_trailing_stop,
+                                            entry_ob_timestamp=signal.get("ob_timestamp"))
+                                        store.set_setting(signal_key, str(signal["timestamp"]))
                         except Exception:
                             log.exception("Scanner error for %s", requested)
             await asyncio.sleep(1)
