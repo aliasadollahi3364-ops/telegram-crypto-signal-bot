@@ -466,7 +466,7 @@ async def run() -> None:
                             elif data.startswith("settings:toggle:"):
                                 key = data.rsplit(":", 1)[1]
                                 config_map = {
-                                    "sma200": ("USE_SMA200_FILTER", False, "فیلتر SMA200"),
+                                    "sma200": ("USE_SMA200_FILTER", True, "فیلتر SMA200"),
                                     "break_even": ("USE_BREAK_EVEN", True, "استاپ سر‌به‌سر"),
                                     "trailing_stop": ("USE_TRAILING_STOP", True, "استاپ شناور"),
                                 }
@@ -517,7 +517,7 @@ async def run() -> None:
                     last_scan = time.monotonic()
                     config = StrategyConfig(
                         use_trend_filter=True,
-                        use_sma200_filter=setting_bool(store, "sma200", "USE_SMA200_FILTER", False),
+                        use_sma200_filter=setting_bool(store, "sma200", "USE_SMA200_FILTER", True),
                         use_break_even=setting_bool(store, "break_even", "USE_BREAK_EVEN", True),
                         use_trailing_stop=setting_bool(store, "trailing_stop", "USE_TRAILING_STOP", True),
                     )
