@@ -63,7 +63,8 @@ class Store:
                 "extreme": "REAL",
                 "break_even_enabled": "INTEGER NOT NULL DEFAULT 0",
                 "trailing_enabled": "INTEGER NOT NULL DEFAULT 0",
-                "trail_distance": "REAL",\n                "entry_ob_timestamp": "INTEGER",
+                "trail_distance": "REAL",
+                "entry_ob_timestamp": "INTEGER",
                 "demo_enabled": "INTEGER NOT NULL DEFAULT 0",
                 "demo_margin": "REAL",
                 "demo_leverage": "REAL",
@@ -160,6 +161,7 @@ class Store:
         self, symbol: str, side: str, entry: float, stop_loss: float | None,
         take_profit: float | None, chart_path: str | None = None,
         *, break_even_enabled: bool = False, trailing_enabled: bool = False,
+        entry_ob_timestamp: int | None = None,
     ) -> int:
         """Record a signal and open a simulated position only when demo margin is available."""
         normalized_side = side.upper()
