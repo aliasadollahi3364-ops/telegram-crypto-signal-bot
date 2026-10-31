@@ -6,6 +6,7 @@ import logging
 from typing import Any
 
 import ccxt
+import httpx
 
 log = logging.getLogger("signal-bot.market")
 
@@ -35,6 +36,54 @@ class WeexMarketData:
             and market.get("quote") == "USDT"
             and market.get("active", True)
         )
+
+    async def top_liquid_perpetual_symbols(
+        self, limit: int = 30, min_quote_volume: float = 1_000_000
+    ) -> list[str]:
+        """Return the most liquid active USDT linear perpetuals by 24h quote volume."""
+        if not self._loaded:
+            await self.load_markets()
+        url = "https://api-contract.weex.com/capi/v3/market/ticker/24hr"
+        async with httpx.AsyncClient(timeout=25) as client:
+            response = await client.get(url)
+            response.raise_for_status()
+            rows = response.json()
+        if not isinstance(rows, list):
+            raise RuntimeError("Unexpected WEEX 24h ticker response")
+        markets_by_id = {
+            str(market.get("id", "")).upper(): (symbol, market)
+            for symbol, market in self.exchange.markets.items()
+            if market.get("swap") and market.get("linear")
+            and market.get("quote") == "USDT"
+            and market.get("active", True)
+        }
+        ranked: list[tuple[float, str]] = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            match = markets_by_id.get(str(row.get("symbol", "")).upper())
+            if not match:
+                continue
+            symbol, market = match
+            try:
+                quote_volume = float(row.get("quoteVolume") or 0)
+                last_price = float(row.get("lastPrice") or 0)
+            except (TypeError, ValueError):
+                continue
+            if quote_volume < min_quote_volume or last_price <= 0:
+                continue
+            # Use the plain BASE/USDT form already understood by resolve_symbol.
+            ranked.append((quote_volume, f"{market.get('base')}/USDT"))
+        ranked.sort(key=lambda item: item[0], reverse=True)
+        unique: list[str] = []
+        seen: set[str] = set()
+        for _, symbol in ranked:
+            if symbol not in seen:
+                unique.append(symbol)
+                seen.add(symbol)
+            if len(unique) >= max(1, min(int(limit), 100)):
+                break
+        return unique
 
     async def resolve_symbol(self, requested: str) -> str:
         """Accept BTC/USDT as a convenience and resolve only to a USDT linear swap."""
