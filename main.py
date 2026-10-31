@@ -17,7 +17,7 @@ from dotenv import load_dotenv
 
 from storage import Store
 from charting import render_signal_chart, render_market_chart
-from strategy import StrategyConfig, evaluate_latest
+from strategy import StrategyConfig, evaluate_latest, ob_trailing_candidate
 
 load_dotenv()
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"),
@@ -530,9 +530,20 @@ async def run() -> None:
                             latest_ts = str(int(candles15[-1][0]))
                             eval_key = "last_eval_candle_" + requested.replace("/", "_").replace(":", "_")
                             if store.get_setting(eval_key) != latest_ts:
+                                ob_candidates: dict[int, float] = {}
+                                if config.use_trailing_stop:
+                                    for opened in store.open_signals(requested):
+                                        candidate = ob_trailing_candidate(
+                                            candles15, candles4h, opened["side"],
+                                            opened.get("entry_ob_timestamp"),
+                                            opened.get("stop_loss"), config,
+                                        )
+                                        if candidate is not None:
+                                            ob_candidates[int(opened["id"])] = candidate
                                 closed_rows = store.evaluate_candle(
                                     requested, float(candles15[-1][2]),
-                                    float(candles15[-1][3]), float(candles15[-1][4])
+                                    float(candles15[-1][3]), float(candles15[-1][4]),
+                                    ob_trailing_candidates=ob_candidates,
                                 )
                                 for row in closed_rows:
                                     pnl_pct = float(row["pnl_pct"])
@@ -557,7 +568,7 @@ async def run() -> None:
                                         order_blocks=signal["order_blocks"], fvgs=signal["fvgs"],
                                         choch_price=signal["choch_price"], timeframe="15m",
                                         break_even_enabled=config.use_break_even,
-                                        trailing_enabled=config.use_trailing_stop)
+                                        trailing_enabled=config.use_trailing_stop,\n                                        entry_ob_timestamp=signal.get("ob_timestamp"))
                                     store.set_setting(signal_key, str(signal["timestamp"]))
                         except Exception:
                             log.exception("Scanner error for %s", requested)
