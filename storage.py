@@ -37,8 +37,12 @@ class Store:
             )""")
             c.execute("""CREATE TABLE IF NOT EXISTS pairs (
                 symbol TEXT PRIMARY KEY, enabled INTEGER NOT NULL DEFAULT 1,
-                added_at TEXT NOT NULL
+                added_at TEXT NOT NULL, source TEXT NOT NULL DEFAULT 'manual'
             )""")
+            pair_columns = {row["name"] for row in c.execute("PRAGMA table_info(pairs)")}
+            if "source" not in pair_columns:
+                c.execute("ALTER TABLE pairs ADD COLUMN source TEXT NOT NULL DEFAULT 'manual'")
+            c.execute("INSERT OR IGNORE INTO settings(key,value) VALUES('auto_pairs_enabled','true')")
             c.execute("""CREATE TABLE IF NOT EXISTS signals (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 symbol TEXT NOT NULL, side TEXT NOT NULL,
@@ -100,10 +104,51 @@ class Store:
     def add_pair(self, symbol: str) -> bool:
         with self._connect() as c:
             cur = c.execute(
-                "INSERT OR IGNORE INTO pairs(symbol,enabled,added_at) VALUES(?,1,?)",
+                "INSERT INTO pairs(symbol,enabled,added_at,source) VALUES(?,1,?,'manual') "
+                "ON CONFLICT(symbol) DO UPDATE SET enabled=1, source='manual'",
                 (symbol, now_iso()),
             )
             return cur.rowcount > 0
+
+    def sync_auto_pairs(self, symbols: list[str]) -> dict[str, int]:
+        """Refresh only auto-managed rows; manually selected pairs are never removed."""
+        normalized = sorted({str(s).strip().upper() for s in symbols if str(s).strip()})
+        with self._connect() as c:
+            existing = {
+                row["symbol"] for row in c.execute(
+                    "SELECT symbol FROM pairs WHERE source='auto'"
+                ).fetchall()
+            }
+            desired = set(normalized)
+            removed = 0
+            if existing - desired:
+                placeholders = ",".join("?" for _ in (existing - desired))
+                cur = c.execute(
+                    f"DELETE FROM pairs WHERE source='auto' AND symbol IN ({placeholders})",
+                    tuple(existing - desired),
+                )
+                removed = cur.rowcount
+            added = 0
+            for symbol in normalized:
+                cur = c.execute(
+                    "INSERT OR IGNORE INTO pairs(symbol,enabled,added_at,source) VALUES(?,1,?,'auto')",
+                    (symbol, now_iso()),
+                )
+                added += max(0, cur.rowcount)
+            auto_count = int(c.execute(
+                "SELECT COUNT(*) FROM pairs WHERE enabled=1 AND source='auto'"
+            ).fetchone()[0])
+            total_count = int(c.execute(
+                "SELECT COUNT(*) FROM pairs WHERE enabled=1"
+            ).fetchone()[0])
+            return {"added": added, "removed": removed, "auto_count": auto_count,
+                    "total_count": total_count}
+
+    def count_auto_pairs(self) -> int:
+        with self._connect() as c:
+            return int(c.execute(
+                "SELECT COUNT(*) FROM pairs WHERE enabled=1 AND source='auto'"
+            ).fetchone()[0])
 
     def remove_pair(self, symbol: str) -> bool:
         with self._connect() as c:
