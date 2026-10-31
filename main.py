@@ -98,7 +98,7 @@ def setting_bool(store: Store, key: str, env_name: str, default: bool) -> bool:
 
 
 def settings_keyboard(store: Store) -> dict[str, Any]:
-    sma = setting_bool(store, "sma200", "USE_SMA200_FILTER", False)
+    sma = setting_bool(store, "sma200", "USE_SMA200_FILTER", True)
     be = setting_bool(store, "break_even", "USE_BREAK_EVEN", True)
     trail = setting_bool(store, "trailing_stop", "USE_TRAILING_STOP", True)
     return {"inline_keyboard": [
@@ -299,7 +299,7 @@ async def handle_command(text: str, chat_id: str, notifier: TelegramNotifier, st
                 sma_values = [None if pd.isna(v) else float(v) for v in sma_series]
                 cfg = StrategyConfig(
                     use_trend_filter=True,
-                    use_sma200_filter=setting_bool(store, "sma200", "USE_SMA200_FILTER", False),
+                    use_sma200_filter=setting_bool(store, "sma200", "USE_SMA200_FILTER", True),
                     use_break_even=setting_bool(store, "break_even", "USE_BREAK_EVEN", True),
                     use_trailing_stop=setting_bool(store, "trailing_stop", "USE_TRAILING_STOP", True),
                 )
@@ -328,7 +328,7 @@ async def handle_command(text: str, chat_id: str, notifier: TelegramNotifier, st
             f"جفت‌ارزهای انتخاب‌شده: {len(store.list_pairs())}\n"
             f"افزودن خودکار ارزها: {'روشن' if store.get_setting('auto_pairs_enabled', 'true').lower() == 'true' else 'خاموش'} | خودکار: {store.count_auto_pairs()}\n"
             f"اسکن استراتژی: {'آزمایشی روشن' if os.getenv('SCANNER_ENABLED', 'true').lower() == 'true' else 'خاموش در تنظیمات سرویس'}\n"
-            f"SMA200: {'روشن' if setting_bool(store, 'sma200', 'USE_SMA200_FILTER', False) else 'خاموش'}\n"
+            f"SMA200: {'روشن' if setting_bool(store, 'sma200', 'USE_SMA200_FILTER', True) else 'خاموش'}\n"
             f"استاپ سر‌به‌سر: {'روشن' if setting_bool(store, 'break_even', 'USE_BREAK_EVEN', True) else 'خاموش'}\n"
             f"استاپ شناور: {'روشن' if setting_bool(store, 'trailing_stop', 'USE_TRAILING_STOP', True) else 'خاموش'}\n"
             f"حساب دمو: موجودی {store.demo_summary()['equity']:.2f}$ | مارجین هر معامله {store.demo_summary()['margin_per_trade']:.2f}$ | اهرم {store.demo_summary()['leverage']:g}x\n"
@@ -413,8 +413,10 @@ async def run() -> None:
         raise RuntimeError("This project is configured for the requested 15m timeframe.")
 
     store = Store()
-    # Keep the TradingView SMA200 entry filter disabled; the chart line remains display-only.
-    store.set_setting("user_sma200", "false")
+    # Apply the agreed V2 defaults once; users can still change SMA200 from Telegram settings.
+    if store.get_setting("strategy_v2_defaults_applied") != "true":
+        store.set_setting("user_sma200", "true")
+        store.set_setting("strategy_v2_defaults_applied", "true")
     notifier = TelegramNotifier(token, chat_id)
     log.info("Bot online; signals-only; timeframe=%s", timeframe)
     scanner_enabled = os.getenv("SCANNER_ENABLED", "true").strip().lower() == "true"
