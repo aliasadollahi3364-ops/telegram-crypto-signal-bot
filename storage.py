@@ -198,6 +198,15 @@ class Store:
                  notional, 0.0 if demo_enabled else None, entry if demo_enabled else None))
             return int(cur.lastrowid)
 
+    def has_open_signal(self, symbol: str, side: str) -> bool:
+        """Return whether this market already has an open signal in the same direction."""
+        with self._connect() as c:
+            row = c.execute(
+                "SELECT 1 FROM signals WHERE status='OPEN' AND symbol=? AND side=? LIMIT 1",
+                (symbol, side.upper()),
+            ).fetchone()
+            return row is not None
+
     def open_signals(self, symbol: str | None = None) -> list[dict[str, Any]]:
         with self._connect() as c:
             if symbol:
