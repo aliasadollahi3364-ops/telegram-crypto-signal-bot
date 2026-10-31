@@ -17,7 +17,7 @@ from dotenv import load_dotenv
 
 from storage import Store
 from charting import render_signal_chart, render_market_chart
-from strategy import StrategyConfig, evaluate_latest, ob_trailing_candidate, ob_trailing_candidate
+from strategy import StrategyConfig, evaluate_latest, ob_trailing_candidate
 
 load_dotenv()
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"),
@@ -306,8 +306,11 @@ async def handle_command(text: str, chat_id: str, notifier: TelegramNotifier, st
                 signal = evaluate_latest(candles, candles4h, cfg)
                 order_blocks = signal.get("order_blocks", []) if signal else []
                 choch_price = signal.get("choch_price") if signal else None
-                render_market_chart(candles, arg, "15m", path, sma_values=sma_values,
-                                    order_blocks=order_blocks, choch_price=choch_price, signal=signal)
+                await asyncio.to_thread(
+                    render_market_chart, candles, arg, "15m", path,
+                    sma_values=sma_values, order_blocks=order_blocks,
+                    choch_price=choch_price, signal=signal,
+                )
                 last = float(candles[-1][4])
                 caption = (f"📈 نمودار تازه WEEX | {arg}\n"
                            f"تایم‌فریم: ۱۵ دقیقه\nآخرین کندل: {last:g}\n"
@@ -351,8 +354,10 @@ async def send_signal_alert(
 ) -> int:
     """Called by the validated strategy adapter when a genuinely new signal appears."""
     path = str(Path(tempfile.gettempdir()) / f"weex_signal_{symbol.replace('/', '_')}_{side.lower()}.png")
-    render_signal_chart(candles, symbol, timeframe, side, entry, stop_loss, take_profit,
-                        order_blocks, fvgs, choch_price, path)
+    await asyncio.to_thread(
+        render_signal_chart, candles, symbol, timeframe, side, entry, stop_loss,
+        take_profit, order_blocks, fvgs, choch_price, path,
+    )
     signal_id = store.record_signal(
         symbol, side, entry, stop_loss, take_profit, path,
         break_even_enabled=break_even_enabled, trailing_enabled=trailing_enabled,
