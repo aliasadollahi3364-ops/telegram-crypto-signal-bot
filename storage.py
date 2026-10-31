@@ -63,7 +63,7 @@ class Store:
                 "extreme": "REAL",
                 "break_even_enabled": "INTEGER NOT NULL DEFAULT 0",
                 "trailing_enabled": "INTEGER NOT NULL DEFAULT 0",
-                "trail_distance": "REAL",
+                "trail_distance": "REAL",\n                "entry_ob_timestamp": "INTEGER",
                 "demo_enabled": "INTEGER NOT NULL DEFAULT 0",
                 "demo_margin": "REAL",
                 "demo_leverage": "REAL",
@@ -185,13 +185,13 @@ class Store:
             cur = c.execute("""INSERT INTO signals
                 (symbol,side,created_at,entry,stop_loss,take_profit,chart_path,
                  initial_stop_loss,initial_risk,extreme,break_even_enabled,
-                 trailing_enabled,trail_distance,demo_enabled,demo_margin,
+                 trailing_enabled,trail_distance,entry_ob_timestamp,demo_enabled,demo_margin,
                  demo_leverage,demo_notional,demo_pnl_usd,mark_price)
-                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (symbol, normalized_side, now_iso(), entry, stop_loss, take_profit,
                  chart_path, stop_loss, risk if valid_risk else None, entry,
                  int(break_even_enabled and valid_risk), int(trailing_enabled and valid_risk),
-                 risk if valid_risk else None, int(demo_enabled),
+                 risk if valid_risk else None, entry_ob_timestamp, int(demo_enabled),
                  margin if demo_enabled else None, leverage if demo_enabled else None,
                  notional, 0.0 if demo_enabled else None, entry if demo_enabled else None))
             return int(cur.lastrowid)
