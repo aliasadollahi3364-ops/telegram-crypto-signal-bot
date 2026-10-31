@@ -511,11 +511,11 @@ async def run() -> None:
                 if time.monotonic() - last_scan >= scan_interval:
                     last_scan = time.monotonic()
                     config = StrategyConfig(
-                    use_trend_filter=True,
-                    use_sma200_filter=setting_bool(store, "sma200", "USE_SMA200_FILTER", False),
-                    use_break_even=setting_bool(store, "break_even", "USE_BREAK_EVEN", True),
-                    use_trailing_stop=setting_bool(store, "trailing_stop", "USE_TRAILING_STOP", True),
-                )
+                        use_trend_filter=True,
+                        use_sma200_filter=setting_bool(store, "sma200", "USE_SMA200_FILTER", False),
+                        use_break_even=setting_bool(store, "break_even", "USE_BREAK_EVEN", True),
+                        use_trailing_stop=setting_bool(store, "trailing_stop", "USE_TRAILING_STOP", True),
+                    )
                     for requested in store.list_pairs():
                         try:
                             candles15 = await market.fetch_ohlcv(requested, timeframe="15m", limit=300)
@@ -525,17 +525,19 @@ async def run() -> None:
                             latest_ts = str(int(candles15[-1][0]))
                             eval_key = "last_eval_candle_" + requested.replace("/", "_").replace(":", "_")
                             if store.get_setting(eval_key) != latest_ts:
-                                closed_rows = store.evaluate_candle(requested, float(candles15[-1][2]),
-                                                                    float(candles15[-1][3]), float(candles15[-1][4]))
+                                closed_rows = store.evaluate_candle(
+                                    requested, float(candles15[-1][2]),
+                                    float(candles15[-1][3]), float(candles15[-1][4])
+                                )
                                 for row in closed_rows:
                                     pnl_pct = float(row["pnl_pct"])
                                     pnl_usd = row.get("demo_pnl_usd")
                                     emoji = "🟢" if (pnl_usd or 0) > 0 else ("🔴" if (pnl_usd or 0) < 0 else "🟡")
                                     title = "حد سود فعال شد" if row["exit_label"] == "TP" else "حد ضرر فعال شد"
                                     await notifier.send(
-                                        f"{emoji} {title} | {row['symbol']}\nشماره: #{row['id']}\n"
-                                        f"ورود: {row['entry']} | خروج: {row['exit_price']}\n"
-                                        f"نتیجه دمو: {(pnl_usd or 0):+.4f}$ ({pnl_pct:+.3f}%)\n"
+                                        f"{emoji} {title} | {row['symbol']}\\nشماره: #{row['id']}\\n"
+                                        f"ورود: {row['entry']} | خروج: {row['exit_price']}\\n"
+                                        f"نتیجه دمو: {(pnl_usd or 0):+.4f}$ ({pnl_pct:+.3f}%)\\n"
                                         "کارمزد و فاندینگ فعلاً محاسبه نشده؛ سفارش واقعی ارسال نشده."
                                     )
                                 store.set_setting(eval_key, latest_ts)
@@ -552,8 +554,8 @@ async def run() -> None:
                                         break_even_enabled=config.use_break_even,
                                         trailing_enabled=config.use_trailing_stop)
                                     store.set_setting(signal_key, str(signal["timestamp"]))
-                            except Exception:
-                                log.exception("Scanner error for %s", requested)
+                        except Exception:
+                            log.exception("Scanner error for %s", requested)
         except asyncio.CancelledError:
             raise
         except Exception:
